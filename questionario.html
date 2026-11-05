@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Questionario Scanner Doppioni</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* layout: una colonna di lettura, barra di stato fissa, una scheda per sezione; i 4 colori del semaforo restano semantici */
+  --bg:#f2f3f6; --surface:#ffffff; --ink:#161a23; --muted:#5a6273; --line:#dcdfe7;
+  --accent:#4338ca; --accent-soft:#e9e8fb;
+  --go:#1f9d55; --warn:#d99a00; --stop:#d63a3a; --friend:#0284c7;
+  --font-display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
+  --font-body:"Atkinson Hyperlegible","Segoe UI",system-ui,sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e1117; --surface:#161a22; --ink:#e7eaf1; --muted:#9aa2b3; --line:#2a303b;
+    --accent:#9a95ff; --accent-soft:#25234a;
+    --go:#3ccf7d; --warn:#f2c03a; --stop:#ff6b6b; --friend:#4cb3f0;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e1117; --surface:#161a22; --ink:#e7eaf1; --muted:#9aa2b3; --line:#2a303b;
+  --accent:#9a95ff; --accent-soft:#25234a;
+  --go:#3ccf7d; --warn:#f2c03a; --stop:#ff6b6b; --friend:#4cb3f0;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-padding-top:120px}
+@media (prefers-reduced-motion: no-preference){html{scroll-behavior:smooth}}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:16px;line-height:1.5}
+.wrap{max-width:760px;margin:0 auto;padding:0 16px}
+header{padding:28px 0 12px}
+h1{font-family:var(--font-display);font-weight:800;font-size:clamp(1.7rem,4.5vw,2.3rem);line-height:1.1;margin:0 0 10px;text-wrap:balance}
+.intro{color:var(--muted);margin:0 0 14px;max-width:65ch}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin:0;padding:0;list-style:none;font-size:.88rem;color:var(--muted)}
+.legend li{display:flex;align-items:center;gap:6px}
+.dot{width:12px;height:12px;border-radius:50%;flex:none}
+.bar{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line)}
+.bar .wrap{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding-top:10px;padding-bottom:10px}
+.count{font-variant-numeric:tabular-nums;font-weight:700}
+.count .todo-n{color:var(--warn)}
+.status{font-size:.85rem;color:var(--muted);flex:1 1 220px}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+button{font:inherit;font-size:.9rem;border-radius:9px;padding:7px 12px;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+:root[data-theme="dark"] button.primary{color:#0e1117}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) button.primary{color:#0e1117}}
+button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent)}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+nav.toc{display:flex;flex-wrap:wrap;gap:6px;padding:14px 0 4px}
+nav.toc a{font-size:.85rem;text-decoration:none;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 10px}
+nav.toc a .n{color:var(--warn);font-weight:700;margin-left:4px;font-variant-numeric:tabular-nums}
+main{display:grid;gap:18px;padding:12px 0 60px}
+section.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:6px 18px 10px}
+section.card h2{font-family:var(--font-display);font-weight:600;font-size:1.3rem;margin:14px 0 2px;text-wrap:balance}
+section.card .sub{color:var(--muted);font-size:.9rem;margin:0 0 6px}
+.q{padding:16px 0 14px 12px;border-top:1px solid var(--line);margin-left:-12px;border-left:3px solid transparent}
+.q:first-of-type{border-top:0}
+.q.todo{border-left-color:var(--warn)}
+.qhead{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.qid{font-size:.75rem;font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums;min-width:2.2em}
+.q h3{font-size:1.02rem;margin:0;flex:1 1 300px;text-wrap:balance}
+.pill{font-size:.72rem;font-weight:700;border-radius:999px;padding:1px 8px;display:none}
+.q.changed .pill.mod{display:inline-block;background:var(--accent-soft);color:var(--accent)}
+.q.todo .pill.req{display:inline-block;background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--ink)}
+.why{color:var(--muted);font-size:.9rem;margin:6px 0 0 calc(2.2em + 10px);max-width:65ch}
+.opts{display:grid;gap:6px;margin:10px 0 0 calc(2.2em + 10px)}
+label.opt{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border:1px solid var(--line);border-radius:10px;cursor:pointer;background:var(--surface)}
+label.opt:hover{border-color:var(--muted)}
+label.opt:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+label.opt input{margin:3px 0 0;accent-color:var(--accent);flex:none;width:17px;height:17px}
+label.opt .t{flex:1}
+.rec{font-size:.7rem;font-weight:700;color:var(--go);border:1px solid currentColor;border-radius:999px;padding:0 7px;align-self:center;white-space:nowrap}
+textarea{width:100%;font:inherit;font-size:.95rem;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px 10px;resize:vertical}
+.textans{margin:10px 0 0 calc(2.2em + 10px)}
+details.note{margin:8px 0 0 calc(2.2em + 10px)}
+details.note summary{cursor:pointer;color:var(--muted);font-size:.85rem}
+details.note textarea{margin-top:6px}
+body.only-todo .q:not(.todo){display:none}
+body.only-todo section.card.done{display:none}
+.copybox{display:none;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin-top:12px}
+.copybox.show{display:block}
+.copybox textarea{min-height:200px}
+@media (max-width:480px){
+  .why,.opts,.textans,details.note{margin-left:0}
+  section.card{padding:4px 14px 8px}
+}
+</style>
+</head>
+<body>
+<header class="wrap">
+  <h1>Questionario Scanner Doppioni</h1>
+  <p class="intro">Ogni domanda ha già selezionata la risposta che ti consiglio (etichetta <b>Consigliata</b>). Cambia solo dove non sei d'accordo, compila quelle con la barra gialla e aggiungi una nota quando vuoi spiegare meglio. Le risposte si salvano da sole: quando hai finito, scrivimi «fatto» in chat.</p>
+  <ul class="legend" aria-label="I colori del semaforo">
+    <li><span class="dot" style="background:var(--go)"></span>Verde: artwork che non hai</li>
+    <li><span class="dot" style="background:var(--warn)"></span>Giallo: artwork tuo, altra versione</li>
+    <li><span class="dot" style="background:var(--stop)"></span>Rosso: copia identica</li>
+    <li><span class="dot" style="background:var(--friend)"></span>Blu: serve a un amico</li>
+  </ul>
+</header>
+<div class="bar">
+  <div class="wrap">
+    <span class="count"><span class="todo-n" id="todoN">0</span> senza risposta · <span id="modN">0</span> modificate</span>
+    <span class="status" id="status" role="status">Caricamento…</span>
+    <div class="btns">
+      <button type="button" id="onlyTodo" aria-pressed="false">Solo da compilare</button>
+      <button type="button" class="primary" id="copyBtn">Copia risposte</button>
+    </div>
+  </div>
+</div>
+<div class="wrap">
+  <div class="copybox" id="copybox">
+    <p class="sub">La copia automatica non è riuscita: seleziona il testo qui sotto e incollalo in chat.</p>
+    <textarea id="copyText" readonly></textarea>
+  </div>
+  <nav class="toc" id="toc" aria-label="Sezioni"></nav>
+  <main id="main"></main>
+</div>
+<script>
+// Opzioni che iniziano con "*" = risposta consigliata, preselezionata.
+const S = [
+{id:"persone", t:"Persone, telefoni e budget", sub:"Chi la usa e con che mezzi: decide l'architettura.", q:[
+ {id:"p1",t:"one",q:"Quante persone useranno l'app, te compreso?",w:"Oltre i 20 dispositivi cambia il modo di distribuire l'APK e va ricontrollato l'uso dei limiti gratuiti di Firebase.",o:["Solo io","2–5","6–20","Più di 20"]},
+ {id:"p2",t:"one",q:"Quanti di loro usano un iPhone?",o:["Nessuno","1 o 2","Circa metà","La maggior parte","Non lo so ancora"]},
+ {id:"p3",t:"text",req:1,q:"Che telefono usi tu? (marca e modello)",w:"Lo scanner va tarato e provato sul telefono che userai di più."},
+ {id:"p4",t:"one",q:"Su quale base costruiamo l'app?",w:"Il cuore è lo scanner. Un'app Android nativa riconosce meglio e più in fretta e vibra sempre; una webapp gira anche su iPhone con un solo progetto, ma legge peggio i numeri piccoli e su iPhone non vibra. Le amicizie funzionano in ogni caso, perché il server è lo stesso.",o:["*Decidi dopo un prototipo dello scanner provato sulle mie carte","Una sola webapp per tutti (Android e iPhone)","App Android (APK) + webapp per gli amici con iPhone","App nativa per Android e iPhone (iPhone tramite TestFlight, 99 $/anno)"]},
+ {id:"p5",t:"one",q:"Per gli amici con iPhone, cosa basta?",w:"Apple non permette di installare app fuori dall'App Store senza un account sviluppatore a pagamento (99 $/anno, poi TestFlight).",o:["*Webapp completa, scanner compreso (niente vibrazione, solo suoni)","Webapp senza scanner: solo collezioni, amici e scambi","App vera tramite TestFlight: pago i 99 $/anno","Niente iPhone per ora"]},
+ {id:"p6",t:"one",q:"Quanto te la cavi con il computer?",w:"Decide quanto automatizzare installazione, aggiornamenti e catalogo.",o:["Non programmo: voglio solo usare l'app","So seguire istruzioni passo passo e lanciare comandi","Programmo un po'","Sono uno sviluppatore"]},
+ {id:"p7",t:"many",q:"Cosa hai già?",o:["Account Google","Account GitHub","Android Studio installato","Node.js installato","Python installato","Un progetto Firebase","Nessuno di questi"]},
+ {id:"p8",t:"one",q:"Budget",w:"Tutto si può fare a 0 €. Solo le notifiche ad app chiusa richiedono di attivare il piano a consumo di Firebase con una carta di credito registrata, anche se a questi volumi il costo resta 0 €.",o:["*Solo gratis, nessuna carta di credito","Gratis, ma posso registrare una carta se il costo previsto resta 0 €","Qualche euro al mese va bene","Anche i 99 $/anno di Apple vanno bene"]},
+ {id:"p9",t:"one",q:"Quando ti serve la prima versione?",o:["*Il prima possibile, anche solo scanner + inventario + scarti","Preferisco aspettare la versione completa","Nessuna fretta"]},
+ {id:"p10",t:"text",q:"Come vuoi chiamare l'app?",w:"Meglio evitare «Pokémon» nel nome: è un marchio registrato."}
+]},
+{id:"collezione", t:"La tua collezione", sub:"Cosa c'è da scansionare, e in che condizioni.", q:[
+ {id:"c1",t:"one",q:"Quante carte hai, più o meno?",o:["Meno di 500","500–2.000","2.000–5.000","Più di 5.000"]},
+ {id:"c2",t:"many",q:"In quali lingue sono?",o:["Italiano","Inglese","Giapponese","Francese","Tedesco","Spagnolo","Portoghese","Coreano","Cinese tradizionale","Cinese semplificato","Altre"]},
+ {id:"c3",t:"text",req:1,q:"Percentuale approssimativa per lingua (es. 60% IT, 30% EN, 10% JP)",w:"Le immagini di riferimento su TCGdex coprono il 92% delle carte inglesi, ma solo il 20% delle giapponesi, il 21% delle cinesi tradizionali e lo 0% di coreane e cinesi semplificate. Più carte asiatiche hai, più pesa la domanda R2."},
+ {id:"c4",t:"many",q:"Di quali epoche?",w:"Le carte vecchie hanno numeri e simboli diversi; le giapponesi vintage non hanno proprio il numero.",o:["Wizards (1999–2003)","e-Card ed EX (2003–2007)","Diamante e Perla, Platino, HGSS (2007–2011)","Nero e Bianco, XY (2011–2016)","Sole e Luna (2017–2019)","Spada e Scudo (2020–2023)","Scarlatto e Violetto (2023–2025)","Megaevoluzione (2025–oggi)"]},
+ {id:"c5",t:"many",q:"Dove sono le carte adesso?",w:"Bustine protettive e toploader fanno riflessi: scansionare la carta nuda è più affidabile.",o:["Raccoglitori a pagine da 9","Scatole o mazzetti sciolti","Bustine protettive (sleeve)","Toploader o porta carte rigidi","Carte gradate (PSA, BGS, CGC…)"]},
+ {id:"c6",t:"one",q:"Riconoscere 9 carte in un colpo da una pagina di raccoglitore?",w:"Velocizza molto l'inventario iniziale, ma è più difficile: lo farei in un secondo momento.",o:["Sì, mi serve dall'inizio","*Sarebbe utile, ma più avanti","No"]},
+ {id:"c7",t:"one",q:"Giochi anche a carte, con dei mazzi?",w:"Se giochi, di alcune carte ti servono fino a 4 copie: la doppia non è la seconda copia ma la quinta.",o:["No, colleziono soltanto","Sì, gioco"]},
+ {id:"c8",t:"one",q:"Quante copie vuoi tenere di ogni carta?",o:["*1, modificabile carta per carta","Sempre 1","4 per Allenatori ed Energie speciali, 1 per il resto"]},
+ {id:"c9",t:"one",q:"Energie base: come le gestiamo?",w:"Sono tantissime e quasi tutte doppie.",o:["*Come tutte le altre carte","Le escludo dallo scanner","Le conto solo come numero totale"]},
+ {id:"c10",t:"one",q:"Carte gradate (in slab)",o:["*Non le gestisco","Le registro con ente e voto"]},
+ {id:"c11",t:"text",q:"Hai già un elenco delle carte da importare? Se sì, in che formato o in quale app?",w:"Un import evita di riscansionare tutto."}
+]},
+{id:"stessa-carta", t:"Cosa vuol dire «stessa carta»", sub:"La regola che decide verde, giallo e rosso.", q:[
+ {id:"v1",t:"one",q:"Una carta è identica (rosso) solo se coincidono set, numero, lingua e variante. Confermi?",w:"Da questa regola dipende tutto il resto dell'app.",o:["*Sì","No: la lingua non conta","No: la variante non conta","No, spiego nella nota"]},
+ {id:"v2",t:"many",q:"Quali varianti vuoi distinguere?",w:"Ogni variante in più è un'informazione da riconoscere o da indicare a mano.",o:["*Normale","*Holo","*Reverse holo","*Prima edizione","Shadowless","*Promo con timbro (prerelease, staff, logo del set)","*Reverse con Poké Ball / Master Ball","Cosmos holo","Carte jumbo","Carte metal","Errori di stampa"]},
+ {id:"v3",t:"one",q:"Stesso disegno ristampato in un altro set (es. Set Base → Set Base 2 → Celebrazioni)",o:["*Giallo: versione diversa dello stesso artwork","Verde: per me sono carte diverse"]},
+ {id:"v4",t:"one",q:"Stesso Pokémon e stessa posa, ma disegno ritagliato, ridisegnato o allargato a carta intera",w:"Il confronto visivo ha bisogno di una soglia: dimmi tu dove passa il confine.",o:["*Verde: artwork diverso","Giallo: per me è lo stesso artwork"]},
+ {id:"v5",t:"one",q:"Se hai due copie identiche, quale va negli scarti?",o:["*L'ultima scansionata","Me lo chiede e scelgo in base alle condizioni"]}
+]},
+{id:"scansione", t:"Scansione e semaforo", sub:"Come si comporta lo scanner nelle tre modalità.", q:[
+ {id:"s1",t:"one",q:"Le carte negli scarti contano come possedute per il semaforo?",w:"Esempio: hai un Pikachu solo negli scarti e ne trovi un altro.",o:["*No: mostra verde con l'avviso «ce l'hai negli scarti»","Sì: contano come le altre"]},
+ {id:"s2",t:"one",q:"Quando una carta è blu, cioè serve a un amico?",w:"Con la lista desideri decide l'amico; con «non ce l'ha» è automatico, ma il blu uscirà molto spesso.",o:["*Quando è nella sua lista desideri","Quando non ce l'ha in nessuna collezione","Entrambe, con un'impostazione per amico"]},
+ {id:"s3",t:"one",q:"Il blu sostituisce rosso o giallo?",w:"Se lo sostituisce, perdi l'informazione «doppia» o «versione diversa».",o:["*No: colore normale più un segnale blu (bordo, suono extra, nome dell'amico)","Sì: il blu sostituisce il colore"]},
+ {id:"s4",t:"one",q:"In inventario, come confermi le carte?",w:"Un tap per carta rallenta molto con centinaia di carte.",o:["*Entrano da sole quando l'app è sicura; i dubbi finiscono in una lista da rivedere","Tap di conferma su ogni carta"]},
+ {id:"s5",t:"one",q:"Ritmo che ti aspetti in inventario",o:["Circa 10 carte al minuto","*20–30 al minuto","40 o più al minuto"]},
+ {id:"s6",t:"one",q:"Copie identiche passate una dopo l'altra",w:"La regola «carta ferma non conta due volte» rischia di non contare la seconda copia uguale.",o:["*Conta di nuovo quando la carta esce dall'inquadratura e ne entra un'altra","Tap per contare ogni copia"]},
+ {id:"s7",t:"one",q:"Rossi spostati da soli negli scarti",w:"Stimo che l'app indovini da sola la stampa esatta tra l'85 e il 95% delle volte: spostare in automatico anche quando è incerta porta errori nella collezione.",o:["*Solo se l'app è sicura; altrimenti chiede","Sempre, con qualche secondo per annullare","Mai: chiede sempre"]},
+ {id:"s8",t:"one",q:"Secondi per annullare",o:["3","*5","10"]},
+ {id:"s9",t:"one",q:"Gialli: cosa succede",o:["*Chiedi ogni volta (Tieni / Scarta)","Tieni sempre","Scarta sempre","Regole per tipo (es. tieni se la lingua è diversa, scarta se cambia solo il set)"]},
+ {id:"s10",t:"one",q:"Reverse e holo",w:"La fotocamera le distingue male, soprattutto con poca luce.",o:["*Interruttore che resta acceso finché non lo spegni (comodo per pile di sole reverse)","Chiedi ogni volta che la carta esiste in più varianti","L'app prova a indovinare e correggo io"]},
+ {id:"s11",t:"one",q:"Cosa vedi sullo schermo al riconoscimento",o:["*Colore a tutto schermo + nome della carta","Colore + set, numero, lingua e prezzo","Personalizzabile"]},
+ {id:"s12",t:"one",q:"Prezzo durante la scansione",w:"In modalità Controllo serve a capire subito se è uscita una carta di valore.",o:["*Sì, piccolo","No"]},
+ {id:"s13",t:"one",q:"Suoni",o:["*Quattro suoni semplici e ben distinti","Suoni personalizzabili","Niente suoni, solo vibrazione"]},
+ {id:"s14",t:"one",q:"Carta che non è nel catalogo (es. coreana)",o:["*Riconosci l'artwork e fammi inserire set e numero","Salvala come «da sistemare» con la foto, la sistemo dopo"]},
+ {id:"s15",t:"one",q:"Riconoscere carte anche da foto della galleria (annunci, foto di amici)",o:["Sì, subito","*Più avanti","No"]}
+]},
+{id:"collezioni", t:"Collezioni", sub:"Come organizzi le carte che tieni.", q:[
+ {id:"k1",t:"one",q:"Una copia può stare in più collezioni?",w:"Le collezioni sono raccoglitori fisici o etichette?",o:["*No: una copia sta in una sola collezione, come in un raccoglitore","Sì: le collezioni sono etichette e una copia può averne più di una"]},
+ {id:"k2",t:"one",q:"Collezioni automatiche (es. tutte le Eevee finiscono da sole in «Illustrazioni Eevee»)",o:["*No, le riempio io","Sì, con regole (Pokémon, lingua, set, rarità, illustratore)"]},
+ {id:"k3",t:"one",q:"Collezione di destinazione in inventario",o:["*La scelgo all'inizio della sessione","L'app la suggerisce carta per carta"]},
+ {id:"k4",t:"one",q:"Visibilità predefinita di una nuova collezione",o:["*Visibile agli amici","Nascosta"]},
+ {id:"k5",t:"many",q:"Viste di avanzamento",o:["Completamento dei set (es. 120/198)","Pokédex (quali Pokémon ti mancano)","Nessuna per ora"]},
+ {id:"k6",t:"many",q:"Informazioni per ogni copia",o:["*Condizione (Mint, Near Mint, Excellent, Good, Played, Poor)","*Note","*Posizione fisica (raccoglitore, pagina)","Prezzo pagato","Data di acquisto","Foto della tua copia"]},
+ {id:"k7",t:"one",q:"Cronologia delle modifiche, con annulla",o:["*Sì, ultimi 30 giorni","No"]}
+]},
+{id:"scarti", t:"Zona scarto e vendita", sub:"Valore, prezzi ed export.", q:[
+ {id:"z1",t:"one",q:"Quale prezzo usare per il valore",w:"TCGdex fornisce i prezzi Cardmarket una volta al giorno, ma per prodotto: non distinguono lingua né condizioni, e qualche carta è abbinata male.",o:["*Andamento (trend)","Prezzo più basso","Media degli ultimi 7 giorni","Media degli ultimi 30 giorni"]},
+ {id:"z2",t:"one",q:"Prezzi delle carte giapponesi e asiatiche",w:"Cardmarket le copre poco: spesso mancheranno.",o:["*Li scrivo a mano quando servono","Uso il prezzo della stessa carta in inglese come stima","Lascio vuoto"]},
+ {id:"z3",t:"one",q:"Prezzo scritto a mano",o:["*Vale finché non lo cancello","Vale solo quando manca quello automatico"]},
+ {id:"z4",t:"many",q:"Dove vendi o vuoi vendere?",w:"Decide le colonne dell'export CSV.",o:["Cardmarket","Vinted","Subito","eBay","Fiere e mercatini","Solo scambi con amici"]},
+ {id:"z5",t:"many",q:"Stati di una carta negli scarti",o:["*Disponibile","*Riservata (promessa a qualcuno)","In vendita","*Venduta (esce dalla collezione, resta nello storico con il prezzo incassato)"]},
+ {id:"z6",t:"one",q:"Valore totale anche delle collezioni che tieni",o:["*Sì","No, solo degli scarti"]},
+ {id:"z7",t:"one",q:"Avvisi sui prezzi (es. una carta negli scarti è salita del 30%)",o:["*No","Sì"]}
+]},
+{id:"amici", t:"Amici, desideri e scambi", sub:"Cosa vedono gli altri e come passano le carte di mano.", q:[
+ {id:"f1",t:"many",q:"Cosa si può mettere nella lista desideri",o:["*Una stampa esatta","*Un artwork in qualsiasi versione","Un artwork solo in certe lingue","*Tutte le carte di un Pokémon","Un set intero"]},
+ {id:"f2",t:"many",q:"Come aggiungi un desiderio",o:["*Cercando nel catalogo","*Scansionando la carta","*Toccando una carta nella collezione di un amico"]},
+ {id:"f3",t:"one",q:"Priorità nei desideri (alta, media, bassa)",o:["Sì","*No"]},
+ {id:"f4",t:"one",q:"«Le tue carte che servono a lui»: da dove le pesca l'app",o:["*Solo dagli scarti","Scarti + doppioni nelle collezioni","Da tutto, con le carte delle collezioni segnalate a parte"]},
+ {id:"f5",t:"one",q:"Aggiungere un amico",o:["*Entrambi devono accettare","Basta il codice, senza conferma"]},
+ {id:"f6",t:"one",q:"Gli amici vedono prezzi e valore delle tue carte?",o:["*Sì","No"]},
+ {id:"f7",t:"one",q:"Cosa può contenere uno scambio",o:["*Solo carte contro carte","Carte + conguaglio in euro","Anche regali (carte senza niente in cambio)"]},
+ {id:"f8",t:"one",q:"Mostrare la differenza di valore tra le due parti dello scambio",o:["*Sì","No"]},
+ {id:"f9",t:"one",q:"L'amico può rispondere con una controproposta?",o:["*Sì","No: solo accetta o rifiuta"]},
+ {id:"f10",t:"one",q:"Quando le carte cambiano proprietario",w:"Se lo scambio avviene di persona tra qualche giorno o per posta, spostarle subito all'accettazione crea confusione.",o:["*All'accettazione diventano «in arrivo»; passano davvero quando entrambi confermano la consegna","Subito all'accettazione","Solo quando entrambi confermano, senza stato intermedio"]},
+ {id:"f11",t:"one",q:"Carte promesse in uno scambio in corso",o:["*Bloccate: non si possono scartare, vendere o promettere ad altri","Libere"]},
+ {id:"f12",t:"one",q:"Dove finiscono le carte ricevute",o:["*In una collezione che scelgo, con una predefinita","Sempre in «Ricevute da scambi»"]},
+ {id:"f13",t:"one",q:"Notifiche (nuova proposta, un amico ha una carta che desideri)",w:"Le notifiche ad app chiusa richiedono un piccolo server: piano a consumo di Firebase con carta di credito registrata, costo previsto 0 €.",o:["*Solo dentro l'app, quando la apri","Notifiche push anche ad app chiusa"]},
+ {id:"f14",t:"one",q:"Gruppi di amici",o:["*No, solo amici singoli","Sì, gruppi (es. il gruppo del negozio)"]},
+ {id:"f15",t:"one",q:"Chat dentro l'app",o:["*No, usiamo WhatsApp","Sì, semplice"]},
+ {id:"f16",t:"one",q:"Chi può usare l'app",o:["*Solo chi riceve un invito da te","Chiunque abbia l'app"]}
+]},
+{id:"catalogo", t:"Catalogo e riconoscimento", sub:"Da dove arrivano i dati e quanto deve essere preciso lo scanner.", q:[
+ {id:"r1",t:"one",q:"Aggiornamento di catalogo e prezzi",w:"Invece di uno script da lanciare sul tuo PC, un'automazione gratuita su GitHub può rigenerare ogni notte catalogo e prezzi; l'app li scarica da sola.",o:["*Automazione GitHub gratuita","Script sul mio PC, lanciato a mano"]},
+ {id:"r2",t:"one",q:"Carte senza immagine nel catalogo (molte giapponesi, tutte le coreane)",o:["*Inserimento a mano; la foto della tua copia diventa il riferimento per le scansioni successive","Valutiamo altre fonti di immagini per le giapponesi (siti terzi, condizioni d'uso da verificare)","Le ignoriamo"]},
+ {id:"r3",t:"one",q:"Una carta aggiunta a mano da un amico la vedono tutti?",o:["*Sì, il catalogo corretto è condiviso","No, resta sua"]},
+ {id:"r4",t:"one",q:"Lingue del catalogo",o:["*Ognuno sceglie le sue al primo avvio","Tutte per tutti"]},
+ {id:"r5",t:"one",q:"Prototipo dello scanner su circa 100 tue carte, prima del resto dell'app",w:"È la parte più rischiosa: la misuro sulle tue carte vere (lingue, epoche, holo) prima di costruirci sopra tutto il resto.",o:["*Sì, ci sto","No, vai diretto all'app completa"]},
+ {id:"r6",t:"one",q:"Precisione minima accettabile",o:["*Artwork giusto almeno 98 volte su 100; stampa esatta almeno 90 su 100, il resto lo correggo io","Mi serve di più","Non saprei"]},
+ {id:"r7",t:"one",q:"Salvare sul telefono le foto delle scansioni sbagliate, per migliorare il riconoscimento",o:["*Sì","No"]},
+ {id:"r8",t:"one",q:"Solo Pokémon, o anche altri giochi in futuro (Magic, One Piece, Lorcana)?",o:["*Solo Pokémon","Teniamo aperta la porta"]}
+]},
+{id:"account", t:"Account, dati e app", sub:"Accesso, aggiornamenti e interfaccia.", q:[
+ {id:"a1",t:"one",q:"Accesso",o:["*Account Google, un tap","Email e password","Entrambi"]},
+ {id:"a2",t:"one",q:"Stesso account su più dispositivi (telefono e tablet)",o:["*Sì","No"]},
+ {id:"a3",t:"one",q:"Export completo della collezione (backup), oltre al CSV di vendita",o:["*Sì","No"]},
+ {id:"a4",t:"one",q:"Senza internet",o:["*Scanner e collezioni vanno offline; amici e scambi solo online","Tutto deve andare offline"]},
+ {id:"a5",t:"one",q:"Aggiornamenti dell'APK",w:"Fuori dal Play Store l'app non si aggiorna da sola.",o:["*L'app avvisa e si aggiorna con un tap","Mando io il nuovo APK a mano"]},
+ {id:"a6",t:"one",q:"Regole Google dal 2027",w:"Dal 2027 Android chiederà app di sviluppatori verificati anche fuori dal Play Store. Esiste un account gratuito per hobbisti, valido fino a 20 dispositivi.",o:["*Va bene registrarmi gratis come sviluppatore","Preferisco evitarlo: allora webapp"]},
+ {id:"a7",t:"one",q:"Lingua dell'app",o:["*Italiano","Italiano e inglese"]},
+ {id:"a8",t:"one",q:"Nome delle carte mostrato",o:["*Nella lingua della carta","Sempre in italiano","Sempre in inglese"]},
+ {id:"a9",t:"one",q:"Schermata di apertura",o:["*Lo scanner","Le collezioni","Un riepilogo"]},
+ {id:"a10",t:"one",q:"Immagini delle carte",w:"Le immagini di tutto il catalogo pesano diversi GB.",o:["*Scaricate quando servono e tenute in memoria","Scaricate in anticipo per le mie carte, per vederle offline","Niente immagini, solo testo"]},
+ {id:"a11",t:"one",q:"Tasto «Segnala un problema» (manda la foto della scansione sbagliata)",o:["*Sì","No"]},
+ {id:"a12",t:"text",q:"App che usi e che ti piacciono (stile, comodità)",w:"Per esempio Collectr, Dex, Pokellector, TCGplayer."}
+]},
+{id:"priorita", t:"Priorità", sub:"Cosa serve subito e cosa può aspettare.", q:[
+ {id:"m1",t:"many",q:"Cosa deve esserci nella prima versione?",o:["*Scanner con semaforo (Controllo)","*Inventario","*Scarti con valore in euro","*Più collezioni","*Export CSV","Amici e collezioni visibili","Lista desideri","Scambi","Blu (serve a un amico)","Webapp per iPhone"]},
+ {id:"m2",t:"text",q:"C'è qualcosa che non ti ho chiesto e che per te è importante?"}
+]}
+];
+
+const DOC = "questionario/risposte", LS = "scanner-questionario-v1";
+const ALL = S.flatMap(s => s.q);
+const byId = Object.fromEntries(ALL.map(q => [q.id, q]));
+const label = o => o.replace(/^\*/, "");
+const recOf = q => (q.o || []).map((o, i) => o.startsWith("*") ? i : -1).filter(i => i >= 0);
+function defOf(q){ const r = recOf(q); return q.t === "one" ? (r.length ? r[0] : null) : q.t === "many" ? r : ""; }
+const ans = Object.fromEntries(ALL.map(q => [q.id, {v: defOf(q), n: ""}]));
+
+function isTodo(q){
+  const v = ans[q.id].v;
+  if (q.t === "text") return !!q.req && !String(v || "").trim();
+  if (q.t === "one") return v === null || v === undefined;
+  return recOf(q).length === 0 && (!Array.isArray(v) || v.length === 0);
+}
+function isChanged(q){
+  if (q.t === "text" || !recOf(q).length) return false;
+  return JSON.stringify(ans[q.id].v) !== JSON.stringify(defOf(q));
+}
+
+// ---------- render ----------
+const main = document.getElementById("main"), toc = document.getElementById("toc");
+S.forEach((s, si) => {
+  const a = document.createElement("a"); a.href = "#" + s.id; a.dataset.sec = s.id;
+  a.innerHTML = `${si + 1}. ${s.t}<span class="n"></span>`; toc.appendChild(a);
+  const sec = document.createElement("section"); sec.className = "card"; sec.id = s.id;
+  sec.innerHTML = `<h2>${si + 1}. ${s.t}</h2><p class="sub">${s.sub}</p>`;
+  s.q.forEach(q => sec.appendChild(renderQ(q)));
+  main.appendChild(sec);
+});
+function renderQ(q){
+  const el = document.createElement("div"); el.className = "q"; el.id = "q-" + q.id; el.dataset.q = q.id;
+  let h = `<div class="qhead"><span class="qid">${q.id.toUpperCase()}</span><h3 id="h-${q.id}">${q.q}</h3><span class="pill mod">Modificata</span><span class="pill req">Da compilare</span></div>`;
+  if (q.w) h += `<p class="why">${q.w}</p>`;
+  if (q.t === "text") {
+    h += `<div class="textans"><textarea id="${q.id}-t" rows="2" aria-labelledby="h-${q.id}"></textarea></div>`;
+  } else {
+    const type = q.t === "one" ? "radio" : "checkbox";
+    h += `<div class="opts" role="${q.t === "one" ? "radiogroup" : "group"}" aria-labelledby="h-${q.id}">` + q.o.map((o, i) =>
+      `<label class="opt" for="${q.id}-${i}"><input type="${type}" name="${q.id}" id="${q.id}-${i}" value="${i}"><span class="t">${label(o)}</span>${o.startsWith("*") ? '<span class="rec">Consigliata</span>' : ""}</label>`).join("") + `</div>`;
+    h += `<details class="note"><summary>Aggiungi una nota</summary><textarea id="${q.id}-n" rows="2" placeholder="Eccezioni, precisazioni, idee" aria-label="Nota per ${q.id.toUpperCase()}"></textarea></details>`;
+  }
+  el.innerHTML = h;
+  return el;
+}
+function syncInputs(q){
+  const a = ans[q.id];
+  if (q.t === "text") { document.getElementById(q.id + "-t").value = a.v || ""; return; }
+  q.o.forEach((_, i) => {
+    document.getElementById(q.id + "-" + i).checked = q.t === "one" ? a.v === i : (a.v || []).includes(i);
+  });
+  const n = document.getElementById(q.id + "-n"); n.value = a.n || "";
+  if (a.n) n.closest("details").open = true;
+}
+function refresh(){
+  let todo = 0, mod = 0;
+  S.forEach(s => {
+    let st = 0;
+    s.q.forEach(q => {
+      const el = document.getElementById("q-" + q.id), t = isTodo(q), c = isChanged(q);
+      el.classList.toggle("todo", t); el.classList.toggle("changed", c);
+      st += t; mod += c;
+    });
+    todo += st;
+    document.getElementById(s.id).classList.toggle("done", st === 0);
+    toc.querySelector(`[data-sec="${s.id}"] .n`).textContent = st ? st : "";
+  });
+  document.getElementById("todoN").textContent = todo;
+  document.getElementById("modN").textContent = mod;
+}
+ALL.forEach(syncInputs); refresh();
+
+main.addEventListener("input", e => {
+  const qel = e.target.closest(".q"); if (!qel) return;
+  const q = byId[qel.dataset.q], a = ans[q.id];
+  if (e.target.id === q.id + "-n") a.n = e.target.value;
+  else if (q.t === "text") a.v = e.target.value;
+  else if (q.t === "one") a.v = Number(e.target.value);
+  else a.v = q.o.map((_, i) => i).filter(i => document.getElementById(q.id + "-" + i).checked);
+  refresh(); scheduleSave();
+});
+
+// ---------- salvataggio ----------
+const statusEl = document.getElementById("status");
+const setStatus = t => { statusEl.textContent = t; };
+let db = null, saving = false, dirty = false, timer = null;
+function apply(saved){
+  if (!saved) return;
+  for (const id in saved) if (byId[id] && saved[id] && typeof saved[id] === "object") ans[id] = {v: saved[id].v, n: saved[id].n || ""};
+  ALL.forEach(syncInputs); refresh();
+}
+function scheduleSave(){
+  try { localStorage.setItem(LS, JSON.stringify({answers: ans, at: Date.now()})); } catch (e) {}
+  dirty = true;
+  if (!db) { setStatus("Salvate solo su questo dispositivo: quando hai finito usa «Copia risposte» e incollale in chat."); return; }
+  setStatus("Salvataggio…");
+  clearTimeout(timer); timer = setTimeout(flush, 1200);
+}
+async function flush(){
+  if (!db || saving || !dirty) return;
+  saving = true; dirty = false;
+  try {
+    await db.doc(DOC).set({answers: ans, updatedAt: Date.now()});
+    setStatus("Salvato. Claude può leggere le risposte.");
+  } catch (e) {
+    dirty = true;
+    setStatus("Salvataggio non riuscito: usa «Copia risposte» e incollale in chat.");
+    if (e && (e.code === "invalid_argument" || e.code === "revoked" || e.code === "not_granted")) db = null;
+  } finally {
+    saving = false;
+    if (dirty && db) { clearTimeout(timer); timer = setTimeout(flush, 1200); }
+  }
+}
+(async () => {
+  let local = null;
+  try { local = JSON.parse(localStorage.getItem(LS) || "null"); } catch (e) {}
+  if (local && local.answers) apply(local.answers);
+  const offline = "Salvataggio online non disponibile: le risposte restano su questo dispositivo. Alla fine usa «Copia risposte».";
+  if (!window.claude || typeof window.claude.use !== "function") { setStatus(offline); return; }
+  const to = setTimeout(() => setStatus(offline), 10000);
+  try { db = await window.claude.use("db"); } catch (e) { db = null; }
+  if (!db) { clearTimeout(to); setStatus(offline); return; }
+  try {
+    const snap = await db.doc(DOC).get();
+    clearTimeout(to);
+    const remote = snap.exists ? snap.data() : null;
+    if (remote && remote.answers && (!local || (remote.updatedAt || 0) >= (local.at || 0))) apply(remote.answers);
+    else if (local && local.answers) dirty = true;
+    setStatus("Collegato: le risposte si salvano da sole.");
+    if (dirty) flush();
+  } catch (e) { clearTimeout(to); db = null; setStatus(offline); }
+})();
+
+// ---------- comandi ----------
+document.getElementById("onlyTodo").addEventListener("click", e => {
+  const on = document.body.classList.toggle("only-todo");
+  e.currentTarget.setAttribute("aria-pressed", on);
+});
+function answerText(q){
+  const v = ans[q.id].v;
+  if (q.t === "text") return String(v || "").trim() || "—";
+  if (q.t === "one") return v === null || v === undefined ? "—" : label(q.o[v]);
+  return Array.isArray(v) && v.length ? v.map(i => label(q.o[i])).join("; ") : "—";
+}
+document.getElementById("copyBtn").addEventListener("click", async () => {
+  const txt = "RISPOSTE QUESTIONARIO SCANNER DOPPIONI\n" + S.map((s, si) =>
+    `\n## ${si + 1}. ${s.t}\n` + s.q.map(q => `${q.id.toUpperCase()} ${q.q}\n   → ${answerText(q)}${ans[q.id].n ? "\n   Nota: " + ans[q.id].n : ""}`).join("\n")).join("\n");
+  try { await navigator.clipboard.writeText(txt); setStatus("Risposte copiate: incollale in chat."); }
+  catch (e) {
+    const box = document.getElementById("copybox"), ta = document.getElementById("copyText");
+    ta.value = txt; box.classList.add("show"); ta.focus(); ta.select();
+  }
+});
+</script>
+</body>
+</html>
