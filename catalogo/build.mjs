@@ -2,7 +2,10 @@
 // 1. elenco carte: inglesi da TCGdex, giapponesi da PTCG-database (sito ufficiale giapponese);
 // 2. scarica ogni immagine una volta sola (catalogo/cache/img, già ridimensionata);
 // 3. calcola le impronte (illustrazione e carta intera) e scrive web/data/.
-// Uso: node catalogo/build.mjs [--limit=300]   (limit = prova veloce su poche carte per lingua)
+// Uso: node catalogo/build.mjs [--limit=300] [--solo-scaricare | --senza-scaricare]
+//   --limit            prova veloce su poche carte per lingua
+//   --solo-scaricare   scarica le immagini mancanti e basta (lento: si può lasciare in sottofondo)
+//   --senza-scaricare  calcola le impronte solo con le immagini già scaricate
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -11,6 +14,7 @@ import { CARD_W, CARD_H, DIM, ART, quantize } from '../web/core.js';
 import { ROOT, CACHE, fetchRetry, pool, loadSession, crops, embed } from './lib.mjs';
 
 const LIMIT = Number(process.argv.find(a => a.startsWith('--limit='))?.slice(8)) || Infinity;
+const ONLY_DL = process.argv.includes('--solo-scaricare'), NO_DL = process.argv.includes('--senza-scaricare');
 const OUT = path.join(ROOT, 'web/data');
 const safe = s => s.replace(/[^A-Za-z0-9._-]/g, '_');
 
@@ -36,10 +40,10 @@ async function japaneseCards() {
       if (!c.img || !c.jp_id) continue;
       out.push({ id: `jp-${c.jp_id}`, name: c.name, set: c.set_name || set,
         num: c.set_total ? `${c.number}/${c.set_total}` : (c.number || ''), lang: 'ja',
-        img: c.img, file: `ja/${c.jp_id}.webp` });
+        img: c.img, file: `ja/${c.jp_id}.webp`, jpId: c.jp_id });
     }
   }
-  return out.slice(0, LIMIT);
+  return out.sort((a, b) => b.jpId - a.jpId).slice(0, LIMIT); // id più alto = carta più recente
 }
 
 async function download(cards, parallel) {
@@ -63,21 +67,34 @@ console.time('catalogo');
 const en = await englishCards();
 const ja = await japaneseCards();
 console.log(`Carte: ${en.length} inglesi, ${ja.length} giapponesi`);
-await download(en, 12);
-await download(ja, 8); // sito ufficiale (dietro CloudFront): poche richieste alla volta
-const cards = [...en, ...ja].filter(c => !c.missing);
+if (!NO_DL) {
+  await download(en, 12);
+  await download(ja, 8); // sito ufficiale (dietro CloudFront): poche richieste alla volta
+}
+if (ONLY_DL) process.exit(0);
+const cards = [...en, ...ja].filter(c => !c.missing && existsSync(path.join(CACHE, 'img', c.file)));
 
 const session = await loadSession();
-const art = new Int8Array(cards.length * DIM), full = new Int8Array(cards.length * DIM);
+const kept = [], artV = [], fullV = [];
 const BATCH = 32;
 for (let i = 0; i < cards.length; i += BATCH) {
   const part = cards.slice(i, i + BATCH);
-  const cs = await Promise.all(part.map(c => crops(path.join(CACHE, 'img', c.file))));
-  const va = await embed(session, cs.map(c => c.art));
-  const vf = await embed(session, cs.map(c => c.full));
-  part.forEach((_, j) => { art.set(quantize(va[j]), (i + j) * DIM); full.set(quantize(vf[j]), (i + j) * DIM); });
+  // Un'immagine rovinata (es. scaricamento interrotto) si scarta e si cancella: verrà riscaricata.
+  const cs = await Promise.all(part.map(c => {
+    const file = path.join(CACHE, 'img', c.file);
+    return crops(file).catch(() => fs.rm(file, { force: true }).then(() => null));
+  }));
+  const ok = part.filter((_, j) => cs[j]), good = cs.filter(Boolean);
+  if (!good.length) continue;
+  const va = await embed(session, good.map(c => c.art));
+  const vf = await embed(session, good.map(c => c.full));
+  ok.forEach((c, j) => { kept.push(c); artV.push(quantize(va[j])); fullV.push(quantize(vf[j])); });
   if ((i / BATCH) % 100 === 0) console.log(`  impronte ${i}/${cards.length}`);
 }
+const art = new Int8Array(kept.length * DIM), full = new Int8Array(kept.length * DIM);
+kept.forEach((_, i) => { art.set(artV[i], i * DIM); full.set(fullV[i], i * DIM); });
+cards.length = 0;
+cards.push(...kept);
 
 await fs.mkdir(OUT, { recursive: true });
 await fs.writeFile(path.join(OUT, 'art.bin'), art);
