@@ -26,7 +26,9 @@ jobs:
           java-version: 21
       - run: npm ci
       - name: Modello delle impronte (stesso del catalogo, versione completa)
-        run: curl -sfL -o android/app/src/main/assets/model.onnx "https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/model.onnx"
+        run: |
+          mkdir -p android/app/src/main/assets
+          curl -sfL -o android/app/src/main/assets/model.onnx "https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/model.onnx"
       - name: Pagina dentro l'app
         run: npx cap sync android
       - name: APK
