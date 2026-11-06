@@ -20,6 +20,13 @@ export function toTensorData(px, channels, out = new Float32Array(3 * SIZE * SIZ
   return out;
 }
 
+// Ingresso fisso per controllare che il motore del telefono calcoli come quello del PC (data/probe.json).
+export function probeInput() {
+  const out = new Float32Array(3 * SIZE * SIZE);
+  for (let i = 0; i < out.length; i++) out[i] = 1.5 * Math.sin(i * 0.0011) * Math.cos(i * 0.00037 + (i % SIZE) * 0.05);
+  return out;
+}
+
 export function normalize(v) {
   let s = 0;
   for (const x of v) s += x * x;

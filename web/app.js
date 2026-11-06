@@ -1,7 +1,7 @@
 // Prototipo dello scanner: misura quanto spesso il riconoscimento indovina sulle carte vere.
 // La carta viene trovata e raddrizzata da sola; la scansione parte quando resta ferma.
 import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.webgpu.min.mjs';
-import { CARD_W, CARD_H, SIZE, DIM, artRect, toTensorData, normalize, scoreAll, topK, artSim, SAME_ART } from './core.js';
+import { CARD_W, CARD_H, SIZE, DIM, artRect, toTensorData, normalize, scoreAll, topK, artSim, SAME_ART, probeInput } from './core.js';
 import { loadCV, findCard, warpCard } from './bordi.js';
 
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
@@ -12,7 +12,7 @@ const STORE = 'scanner-proto-risultati', CAM = 'scanner-proto-obiettivo';
 const $ = id => document.getElementById(id);
 
 let session, backend, cards, byId, idx, artCat, fullCat, track;
-let sleeve = false, pending = null, torchOn = false, cams = [];
+let sleeve = false, pending = null, torchOn = false, cams = [], checks = [];
 let results = [];
 try { results = JSON.parse(localStorage.getItem(STORE)) || []; } catch { /* memoria non disponibile */ }
 const save = () => { try { localStorage.setItem(STORE, JSON.stringify(results)); } catch { /* resta in memoria */ } };
@@ -51,13 +51,24 @@ async function getBytes(url, label, keep) {
 
 async function startModel() {
   const gpu = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null;
-  const bytes = await getBytes(MODEL_URL + MODEL_FILE, 'modello', true);
-  loading('Avvio il riconoscimento (la prima volta circa un minuto)…');
-  for (const ep of gpu ? ['webgpu', 'wasm'] : ['wasm']) {
-    try { session = await ort.InferenceSession.create(bytes, { executionProviders: [ep] }); backend = ep; return; }
-    catch (e) { console.warn(ep, e); }
+  const probe = (await (await fetch('data/probe.json')).json()).v;
+  // Ogni motore deve ridare l'impronta calcolata sul PC per l'ingresso fisso: alcune schede grafiche
+  // di telefono sbagliano i calcoli a precisione ridotta. Allora si prova il modello completo,
+  // e per ultimo il calcolo senza scheda grafica (più lento ma corretto).
+  const tries = [['webgpu', 'model_fp16.onnx'], ['webgpu', 'model.onnx'], ['wasm', MODEL_FILE]].filter(([ep]) => gpu || ep === 'wasm');
+  for (const [ep, file] of tries) {
+    try {
+      const bytes = await getBytes(MODEL_URL + file, file === 'model.onnx' ? 'modello completo' : 'modello', true);
+      loading('Avvio il riconoscimento (la prima volta circa un minuto)…');
+      const s = await ort.InferenceSession.create(bytes, { executionProviders: [ep] });
+      const out = await s.run({ pixel_values: new ort.Tensor('float32', probeInput(), [1, 3, SIZE, SIZE]) });
+      const v = normalize(out.last_hidden_state.data.subarray(0, DIM)), sim = v.reduce((a, x, i) => a + x * probe[i], 0);
+      checks.push(`${ep}/${file.replace('.onnx', '')} ${sim.toFixed(3)}`);
+      if (sim >= 0.98) { session = s; backend = `${ep} ${file}`; return; }
+      s.release?.();
+    } catch (e) { checks.push(`${ep}/${file} errore`); console.warn(ep, file, e); }
   }
-  throw new Error('Il modello non parte su questo telefono.');
+  throw new Error(`il riconoscimento dà risultati sbagliati su questo telefono (${checks.join(', ')})`);
 }
 
 // Fotocamera posteriore; deviceId = un obiettivo preciso (scelto con «Obiettivo»).
@@ -180,13 +191,22 @@ async function recognize() {
     const ms = Math.round(performance.now() - t0);
     const ids = t => t.map(([, i]) => cards[i][0]);
     const tc = topK(sc, 5);
-    pending = { t: Date.now(), b: sleeve ? 1 : 0, ms, c: ids(tc), s: tc.map(([s]) => +(s / 2).toFixed(3)), a: ids(topK(sa, 5)), f: ids(topK(sf, 5)) };
+    pending = { t: Date.now(), b: sleeve ? 1 : 0, ms, c: ids(tc), s: tc.map(([s]) => +(s / 2).toFixed(3)), a: ids(topK(sa, 5)), f: ids(topK(sf, 5)), px: lumaStats() };
     $('seen').getContext('2d').drawImage(card, 0, 0);
     showCandidates();
   } catch (e) {
     alertLine(`Errore nel riconoscimento: ${e.message}`);
     state = 'cerca';
   }
+}
+
+// Luminosità media e contrasto della carta vista (0-255): un'immagine nera o piatta si riconosce subito.
+function lumaStats() {
+  const d = cardCtx.getImageData(0, 0, CARD_W, CARD_H).data, n = d.length / 4;
+  let s = 0, s2 = 0;
+  for (let i = 0; i < d.length; i += 4) { const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; s += y; s2 += y * y; }
+  const m = s / n;
+  return [Math.round(m), Math.round(Math.sqrt(Math.max(0, s2 / n - m * m)))];
 }
 
 function showCandidates() {
@@ -248,13 +268,13 @@ function openMenu() {
   t.innerHTML = `<tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>`;
   for (const r of tableRows()) { const tr = t.insertRow(); r.forEach(v => { tr.insertCell().textContent = v; }); }
   $('table').replaceChildren(results.length ? t : Object.assign(document.createElement('p'), { textContent: 'Ancora nessuna scansione.' }));
-  $('tech').textContent = `Catalogo: ${cards.length} carte · motore: ${backend} · fotocamera: ${camInfo()}`;
+  $('tech').textContent = `Catalogo: ${cards.length} carte · motore: ${backend} (verifica ${checks.join(", ")}) · fotocamera: ${camInfo()}`;
   $('copyText').style.display = 'none';
   $('menu').classList.add('show');
 }
 
 async function copyResults() {
-  const lines = ['SCANNER CARTE — risultati prototipo', `motore ${backend} ${MODEL_FILE} · catalogo ${cards.length} · fotocamera ${camInfo()} · ${navigator.userAgent}`,
+  const lines = ['SCANNER CARTE — risultati prototipo', `motore ${backend} · verifica ${checks.join(" ")} · catalogo ${cards.length} · fotocamera ${camInfo()} · ${navigator.userAgent}`,
     'gruppo | n | 1° posto | prime 5 | solo disegno | carta intera | ms', ...tableRows().map(r => r.join(' | ')),
     'DATI', ...results.map(r => JSON.stringify(r))];
   const text = lines.join('\n');

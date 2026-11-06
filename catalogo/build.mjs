@@ -10,7 +10,8 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
-import { CARD_W, CARD_H, DIM, ART, quantize } from '../web/core.js';
+import ort from 'onnxruntime-node';
+import { CARD_W, CARD_H, SIZE, DIM, ART, quantize, normalize, probeInput } from '../web/core.js';
 import { ROOT, CACHE, fetchRetry, pool, loadSession, crops, embed } from './lib.mjs';
 
 const LIMIT = Number(process.argv.find(a => a.startsWith('--limit='))?.slice(8)) || Infinity;
@@ -21,7 +22,8 @@ const safe = s => s.replace(/[^A-Za-z0-9._-]/g, '_');
 async function englishCards() {
   const list = await fetchRetry('https://api.tcgdex.net/v2/en/cards');
   const sets = Object.fromEntries((await fetchRetry('https://api.tcgdex.net/v2/en/sets')).map(s => [s.id, s.name]));
-  return list.filter(c => c.image).slice(0, LIMIT).map(c => {
+  // /tcgp/ = TCG Pocket: carte solo digitali, non esistono stampate.
+  return list.filter(c => c.image && !c.image.includes('/tcgp/')).slice(0, LIMIT).map(c => {
     const setId = c.image.split('/').at(-2);
     return { id: c.id, name: c.name, set: sets[setId] || setId, num: c.localId, lang: 'en',
       img: c.image + '/low.webp', file: `en/${safe(c.id)}.webp` };
@@ -97,6 +99,10 @@ cards.length = 0;
 cards.push(...kept);
 
 await fs.mkdir(OUT, { recursive: true });
+// Impronta di riferimento dell'ingresso fisso: il telefono la usa per verificare il suo motore.
+const probe = await session.run({ pixel_values: new ort.Tensor('float32', probeInput(), [1, 3, SIZE, SIZE]) });
+await fs.writeFile(path.join(OUT, 'probe.json'),
+  JSON.stringify({ v: Array.from(normalize(probe.last_hidden_state.data.subarray(0, DIM)), x => +x.toFixed(6)) }));
 await fs.writeFile(path.join(OUT, 'art.bin'), art);
 await fs.writeFile(path.join(OUT, 'full.bin'), full);
 await fs.writeFile(path.join(OUT, 'cards.json'), JSON.stringify({
