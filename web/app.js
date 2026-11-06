@@ -12,12 +12,13 @@ const OCR_URL = 'https://huggingface.co/nakamura196/ppocrv5-mobile-web-onnx/reso
 // fp16: impronte uguali a quelle del catalogo (somiglianza 0,9999); la versione int8 se ne allontana (0,985).
 const MODEL_FILE = 'model_fp16.onnx';
 const OCR_W = 640, OCR_H = 892; // carta raddrizzata per leggere le scritte piccole
-const STORE = 'scanner-proto-risultati', CAM = 'scanner-proto-obiettivo';
+const STORE = 'scanner-proto-risultati', CAM = 'scanner-proto-obiettivo', LAST_LANG = 'scanner-proto-lingua';
 const LANGS = { it: 'italiano', en: 'inglese', fr: 'francese', de: 'tedesco', es: 'spagnolo', pt: 'portoghese', ja: 'giapponese', zh: 'cinese', ko: 'coreano' };
 const $ = id => document.getElementById(id);
 
-let session, backend, ocr, cards, byId, idx, artCat, fullCat, track, imageCapture, photoSize, shotInfo = '';
-let sleeve = false, pending = null, torchOn = false, cams = [], checks = [], pickLang = 'it';
+let session, backend, ocr, cards, byId, idx, artCat, fullCat, track, shotInfo = '';
+let sleeve = false, pending = null, torchOn = false, cams = [], checks = [], pickLang = 'it', lastLang = 'it';
+try { lastLang = localStorage.getItem(LAST_LANG) || 'it'; } catch { /* si parte dall'italiano */ }
 let results = [];
 try { results = JSON.parse(localStorage.getItem(STORE)) || []; } catch { /* memoria non disponibile */ }
 const save = () => { try { localStorage.setItem(STORE, JSON.stringify(results)); } catch { /* resta in memoria */ } };
@@ -96,13 +97,6 @@ async function startCamera(deviceId) {
   $('cam').srcObject = stream;
   await $('cam').play();
   track = stream.getVideoTracks()[0];
-  // Per le foto vere: risoluzione al massimo 4000 px di lato (le foto da 64 MP sarebbero lente e pesanti).
-  imageCapture = 'ImageCapture' in self ? new ImageCapture(track) : null;
-  photoSize = undefined;
-  try {
-    const pc = await imageCapture?.getPhotoCapabilities();
-    if (pc?.imageWidth?.max) { const w = Math.min(pc.imageWidth.max, 4000); photoSize = { imageWidth: w, imageHeight: Math.round(w * pc.imageHeight.max / pc.imageWidth.max) }; }
-  } catch { /* niente foto vere: si usa il video */ }
   const caps = track.getCapabilities?.() || {};
   if (caps.focusMode?.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
   $('torch').hidden = !caps.torch;
@@ -144,28 +138,13 @@ function alertLine(text) { $('stats').textContent = text; setTimeout(renderStats
 // Stati: 'cerca' (nessuna carta ferma), 'risultato' (scheda aperta),
 // 'via' (aspetto che la carta esca, così una carta tenuta ferma non conta due volte).
 let state = 'cerca', lastQuad = null, still = 0, gone = 0;
-const STILL = 3, GONE = 4, MOVE = 0.015; // fotogrammi fermi, fotogrammi senza carta, spostamento tollerato
-const HINT = { cerca: 'Inquadra una carta su un fondo scuro', ferma: 'Tieni ferma…', scatto: 'Scatto la foto…', leggo: 'Riconosco…', via: 'Fatto: togli la carta e mettine un\'altra' };
+const STILL = 2, GONE = 4, MOVE = 0.025; // fotogrammi fermi, fotogrammi senza carta, spostamento tollerato
+const HINT = { cerca: 'Inquadra una carta su un fondo scuro', ferma: 'Tieni ferma…', leggo: 'Riconosco…', via: 'Fatto: togli la carta e mettine un\'altra' };
 
 const canvas = (w, h) => { const c = Object.assign(document.createElement('canvas'), { width: w, height: h }), x = c.getContext('2d', { willReadFrequently: true }); x.imageSmoothingQuality = 'high'; return [c, x]; };
 const [cardHi, cardHiCtx] = canvas(OCR_W, OCR_H), [card, cardCtx] = canvas(CARD_W, CARD_H), [sq, sqCtx] = canvas(SIZE, SIZE);
 
 const moved = (a, b, size) => a.some(([x, y], i) => Math.hypot(x - b[i][0], y - b[i][1]) > MOVE * size);
-
-// Foto vera al posto del fotogramma video: più nitida, così si legge anche il numero in fondo alla carta.
-// null se il telefono non scatta o se nella foto non si trovano i bordi: allora si usa il video.
-async function stillPhoto() {
-  if (!imageCapture) return null;
-  try {
-    const bmp = await createImageBitmap(await imageCapture.takePhoto(photoSize));
-    const k = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
-    const c = Object.assign(document.createElement('canvas'), { width: Math.round(bmp.width * k), height: Math.round(bmp.height * k) });
-    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-    bmp.close();
-    const q = findCard(c, c.width, c.height);
-    return q && { c, q };
-  } catch (e) { console.warn('scatto', e); return null; }
-}
 
 // Raddrizza la carta nella versione grande (per leggere) e da lì quella piccola (per il disegno).
 function capture(src, w, h, quad) {
@@ -186,11 +165,10 @@ async function tick() {
       still = q && lastQuad && !moved(q, lastQuad, Math.max(w, h)) ? still + 1 : 0;
       if (still >= STILL) {
         state = 'risultato';
-        $('hint').textContent = HINT.scatto;
-        const t0 = performance.now(), shot = await stillPhoto();
+        // Fotogramma del video, non una foto: lo scatto vero (prova del 7/11) costava 1,5-2 s e usciva mosso.
         $('hint').textContent = HINT.leggo;
-        if (shot) capture(shot.c, shot.c.width, shot.c.height, shot.q); else capture(video, w, h, q);
-        shotInfo = shot ? `foto ${shot.c.width}×${shot.c.height} in ${Math.round(performance.now() - t0)} ms` : `video${imageCapture ? ' (foto non riuscita)' : ''}`;
+        capture(video, w, h, q);
+        shotInfo = 'video';
         await recognize();
       }
     }
@@ -236,13 +214,17 @@ async function recognize() {
     const sa = scoreAll(va, artCat), sf = scoreAll(vf, fullCat), sc = sa.map((s, i) => s + sf[i]);
     const t1 = performance.now();
     const read = await readCard(ort, ocr, cardHiCtx.getImageData(0, 0, OCR_W, OCR_H));
+    // Lingua non letta: si usa l'ultima confermata (una pila di carte è quasi sempre di una lingua), ma si chiede.
+    const guessed = !read.lang;
+    if (guessed) read.lang = lastLang;
     const print = choosePrint(candidatePrints(sc, artCat), cards, read);
+    if (guessed) print.sure = false;
     const ids = t => t.map(([, i]) => cards[i][0]);
     const tc = topK(sc, 5);
     pending = {
       t: Date.now(), b: sleeve ? 1 : 0, src: shotInfo, ms: Math.round(performance.now() - t0), msOcr: Math.round(performance.now() - t1),
       c: ids(tc), s: tc.map(([s]) => +(s / 2).toFixed(3)), a: ids(topK(sa, 5)), f: ids(topK(sf, 5)), px: lumaStats(),
-      pi: cards[print.i][0], pl: print.lang, sure: print.sure ? 1 : 0, rl: read.lang, rn: read.number?.num ?? null, rt: read.number?.total ?? null,
+      pi: cards[print.i][0], pl: print.lang, sure: print.sure ? 1 : 0, rl: guessed ? null : read.lang, rn: read.number?.num ?? null, rt: read.number?.total ?? null,
       ranked: [...new Set(print.ranked.map(r => cards[r.i][0]))].slice(0, 5),
     };
     $('seen').getContext('2d').drawImage(card, 0, 0);
@@ -271,7 +253,7 @@ function setPickLang(lang) {
 
 function showCandidates() {
   const p = pending;
-  $('readInfo').textContent = `Letto: ${p.rl ? LANGS[p.rl] : 'lingua non letta'}${p.rn ? ` · n. ${p.rn}${p.rt ? '/' + p.rt : ''}` : ' · numero non letto'}. Correggi la lingua se serve, poi tocca la tua stampa.`;
+  $('readInfo').textContent = `Letto: ${p.rl ? LANGS[p.rl] : `lingua non letta (propongo ${LANGS[p.pl]}, l'ultima confermata)`}${p.rn ? ` · n. ${p.rn}${p.rt ? '/' + p.rt : ''}` : ' · numero non letto'}. Correggi la lingua se serve, poi tocca la tua stampa.`;
   setPickLang(p.pl === 'ja' ? 'ja' : p.pl);
   $('cands').replaceChildren(...p.ranked.map((id, k) => {
     const row = byId.get(id), [, name, set, , l, img] = row;
@@ -293,6 +275,7 @@ function showCandidates() {
 // pick: { id, lang } scelti, null = nessuna, undefined = rifai (non conta e riprova subito sulla stessa carta).
 function decide(pick) {
   if (pick !== undefined) { results.push({ ...pending, p: pick?.id ?? null, l: pick?.lang ?? null }); save(); }
+  if (pick?.lang) { lastLang = pick.lang; try { localStorage.setItem(LAST_LANG, lastLang); } catch { /* resta in memoria */ } }
   pending = null;
   state = pick === undefined ? 'cerca' : 'via';
   still = gone = 0;

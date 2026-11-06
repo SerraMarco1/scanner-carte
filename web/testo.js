@@ -135,7 +135,9 @@ export function cardNumber(lines, height) {
 // sulle righe in alto (il nome) e su quelle più grandi.
 export async function readCard(ort, m, img) {
   const t0 = Date.now();
-  const found = (await detect(ort, m.det, img)).sort((a, b) => a.y - b.y).slice(0, 40);
+  // Le «righe» trovate dentro il disegno sono dettagli dell'illustrazione o riflessi: si saltano.
+  const inArt = b => { const cx = (b.x + b.w / 2) / img.width, cy = (b.y + b.h / 2) / img.height; return cx > 0.1 && cx < 0.9 && cy > 0.12 && cy < 0.52; };
+  const found = (await detect(ort, m.det, img)).filter(b => !inArt(b)).sort((a, b) => a.y - b.y).slice(0, 40);
   const lines = [];
   for (const b of found) lines.push({ ...b, ...(await read(ort, m.latin, m.latinDict, img, b)) });
   let lang = latinLanguage(lines), asian = '';

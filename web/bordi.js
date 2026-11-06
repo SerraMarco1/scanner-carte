@@ -42,22 +42,30 @@ export function findCard(src, w, h) {
   try {
     cv.cvtColor(img, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
-    cv.Canny(gray, edges, 40, 120);
-    cv.dilate(edges, edges, kernel); // chiude i piccoli buchi nel bordo
-    cv.findContours(edges, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
     let best = null, bestArea = det.width * det.height * 0.06;
-    for (let i = 0; i < contours.size(); i++) {
-      const c = contours.get(i), area = cv.contourArea(c);
-      if (area > bestArea) {
-        const poly = new cv.Mat();
-        cv.approxPolyDP(c, poly, 0.03 * cv.arcLength(c, true), true);
-        if (poly.rows === 4 && cv.isContourConvex(poly)) {
-          const q = order([0, 1, 2, 3].map(j => [poly.data32S[2 * j], poly.data32S[2 * j + 1]]));
-          if (cardShaped(q)) { best = q; bestArea = area; }
+    // Tre sensibilità dei bordi e tutti i contorni, non solo quelli esterni: su fondi chiari, venati
+    // o pieni di oggetti il bordo della carta si salda con quello che ha intorno (prova su scene
+    // simulate: fondo bianco da 4 a 10 su 10, legno da 1 a 5; fondo scuro sempre 10 su 10).
+    for (const [lo, hi] of [[20, 60], [40, 120], [80, 200]]) {
+      cv.Canny(gray, edges, lo, hi);
+      cv.dilate(edges, edges, kernel); // chiude i piccoli buchi nel bordo
+      cv.findContours(edges, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+      for (let i = 0; i < contours.size(); i++) {
+        const c = contours.get(i), area = cv.contourArea(c);
+        if (area > bestArea) {
+          const poly = new cv.Mat();
+          cv.approxPolyDP(c, poly, 0.03 * cv.arcLength(c, true), true);
+          let q = poly.rows === 4 && cv.isContourConvex(poly) ? order([0, 1, 2, 3].map(j => [poly.data32S[2 * j], poly.data32S[2 * j + 1]])) : null;
+          if (!q) {
+            // Contorno non a 4 lati ma che riempie bene un rettangolo ruotato: si prende quel rettangolo.
+            const r = cv.minAreaRect(c);
+            if (area > 0.85 * r.size.width * r.size.height) q = order(cv.RotatedRect.points(r).map(p => [p.x, p.y]));
+          }
+          if (q && cardShaped(q)) { best = q; bestArea = area; }
+          poly.delete();
         }
-        poly.delete();
+        c.delete();
       }
-      c.delete();
     }
     return best && best.map(([x, y]) => [x / k, y / k]);
   } finally {
