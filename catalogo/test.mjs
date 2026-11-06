@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
-import { CARD_W, CARD_H, DIM, scoreAll, topK } from '../web/core.js';
+import { CARD_W, CARD_H, scoreAll, topK, artSim, SAME_ART } from '../web/core.js';
 import { ROOT, CACHE, fetchRetry, pool, loadSession, crops, embed } from './lib.mjs';
 
 const arg = (k, d) => process.argv.find(a => a.startsWith(`--${k}=`))?.split('=')[1] ?? d;
@@ -65,6 +65,9 @@ async function photoLike(file) {
   return sharp(shot).composite([{ input: Buffer.from(glare) }]).jpeg({ quality: 55 + Math.floor(rnd() * 30) }).toBuffer();
 }
 
+// Giusta = stesso disegno: stessa carta, ristampa con lo stesso nome, o gemella in un'altra lingua.
+const sameArt = (i, j) => i === j || cards[i].name === cards[j].name || artSim(artCat, i, j) >= SAME_ART;
+
 const session = await loadSession(MODEL, !MODEL.includes('quantized'));
 const pct = (a, b) => b ? `${(100 * a / b).toFixed(1)}%` : '—';
 const all = [];
@@ -75,15 +78,14 @@ for (const [name, qs] of Object.entries(groups)) {
     const [va] = await embed(session, [c.art]);
     const [vf] = await embed(session, [c.full]);
     const sa = scoreAll(va, artCat), sf = scoreAll(vf, fullCat), sc = sa.map((s, i) => s + sf[i]);
-    // Giusta = stessa carta, oppure stesso nome (ristampa dello stesso disegno).
-    const ok = i => i === q.expect || cards[i].name === cards[q.expect].name;
+    const ok = i => sameArt(i, q.expect);
     for (const [k, s] of [['art', sa], ['full', sf], ['comb', sc]]) {
       const t = topK(s, 5);
       if (ok(t[0][1])) res[k][0]++;
       if (t.some(([, i]) => ok(i))) res[k][1]++;
       if (k === 'comb') {
-        // Margine = distacco dalla prima candidata con un nome diverso (cioè un altro disegno).
-        const t20 = topK(s, 20), other = t20.find(([, i]) => cards[i].name !== cards[t[0][1]].name);
+        // Margine = distacco dalla prima candidata con un altro disegno.
+        const t20 = topK(s, 20), other = t20.find(([, i]) => !sameArt(i, t[0][1]));
         all.push({ ok: ok(t[0][1]), margin: t[0][0] - (other ? other[0] : 0) });
       }
     }

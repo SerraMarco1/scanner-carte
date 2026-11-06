@@ -41,6 +41,15 @@ export function scoreAll(q, cat, dim = DIM) {
   return out;
 }
 
+// Due stampe hanno lo stesso disegno se le loro illustrazioni nel catalogo sono quasi identiche.
+// Misurato: disegni diversi stanno quasi sempre sotto 0,90; gemelle inglese/giapponese tra 0,90 e 0,97.
+export const SAME_ART = 0.92;
+export function artSim(cat, i, j, dim = DIM) {
+  let s = 0;
+  for (let k = 0; k < dim; k++) s += cat[i * dim + k] * cat[j * dim + k];
+  return s / 127 / 127;
+}
+
 export function topK(scores, k = 5) {
   const best = []; // [punteggio, indice], dal migliore
   for (let i = 0; i < scores.length; i++) {

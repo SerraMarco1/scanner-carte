@@ -1,7 +1,7 @@
 // Prototipo dello scanner: misura quanto spesso il riconoscimento indovina sulle carte vere.
 // La carta va allineata alla cornice gialla (il ritaglio automatico arriverà dopo).
 import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.webgpu.min.mjs';
-import { CARD_W, CARD_H, SIZE, DIM, artRect, toTensorData, normalize, scoreAll, topK } from './core.js';
+import { CARD_W, CARD_H, SIZE, DIM, artRect, toTensorData, normalize, scoreAll, topK, artSim, SAME_ART } from './core.js';
 
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
 const MODEL_URL = 'https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/';
@@ -10,7 +10,7 @@ const MODEL_FILE = 'model_fp16.onnx';
 const STORE = 'scanner-proto-risultati';
 const $ = id => document.getElementById(id);
 
-let session, backend, cards, byId, artCat, fullCat, track;
+let session, backend, cards, byId, idx, artCat, fullCat, track;
 let lang = 'it', sleeve = false, pending = null, torchOn = false;
 let results = [];
 try { results = JSON.parse(localStorage.getItem(STORE)) || []; } catch { /* memoria non disponibile */ }
@@ -73,6 +73,7 @@ async function init() {
     const meta = JSON.parse(new TextDecoder().decode(await getBytes('data/cards.json', 'elenco carte')));
     cards = meta.cards;
     byId = new Map(cards.map(c => [c[0], c]));
+    idx = new Map(cards.map((c, i) => [c[0], i]));
     artCat = new Int8Array((await getBytes('data/art.bin', 'impronte illustrazioni')).buffer);
     fullCat = new Int8Array((await getBytes('data/full.bin', 'impronte carte')).buffer);
     await startModel();
@@ -162,7 +163,8 @@ function decide(pick) {
 }
 
 // ---------- statistiche ----------
-const sameArt = (a, b) => a === b || (!!a && !!b && byId.get(a)?.[1] === byId.get(b)?.[1]);
+// Stesso disegno: stessa carta, ristampa con lo stesso nome, o gemella in un'altra lingua.
+const sameArt = (a, b) => a === b || (!!a && !!b && (byId.get(a)[1] === byId.get(b)[1] || artSim(artCat, idx.get(a), idx.get(b)) >= SAME_ART));
 function summary(list) {
   const n = list.length, hit = (k, m) => list.filter(r => r.p && r[m].slice(0, k).some(id => sameArt(id, r.p))).length;
   return {
