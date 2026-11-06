@@ -16,7 +16,7 @@ const STORE = 'scanner-proto-risultati', CAM = 'scanner-proto-obiettivo';
 const LANGS = { it: 'italiano', en: 'inglese', fr: 'francese', de: 'tedesco', es: 'spagnolo', pt: 'portoghese', ja: 'giapponese', zh: 'cinese', ko: 'coreano' };
 const $ = id => document.getElementById(id);
 
-let session, backend, ocr, cards, byId, idx, artCat, fullCat, track;
+let session, backend, ocr, cards, byId, idx, artCat, fullCat, track, imageCapture, photoSize, shotInfo = '';
 let sleeve = false, pending = null, torchOn = false, cams = [], checks = [], pickLang = 'it';
 let results = [];
 try { results = JSON.parse(localStorage.getItem(STORE)) || []; } catch { /* memoria non disponibile */ }
@@ -96,6 +96,13 @@ async function startCamera(deviceId) {
   $('cam').srcObject = stream;
   await $('cam').play();
   track = stream.getVideoTracks()[0];
+  // Per le foto vere: risoluzione al massimo 4000 px di lato (le foto da 64 MP sarebbero lente e pesanti).
+  imageCapture = 'ImageCapture' in self ? new ImageCapture(track) : null;
+  photoSize = undefined;
+  try {
+    const pc = await imageCapture?.getPhotoCapabilities();
+    if (pc?.imageWidth?.max) { const w = Math.min(pc.imageWidth.max, 4000); photoSize = { imageWidth: w, imageHeight: Math.round(w * pc.imageHeight.max / pc.imageWidth.max) }; }
+  } catch { /* niente foto vere: si usa il video */ }
   const caps = track.getCapabilities?.() || {};
   if (caps.focusMode?.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
   $('torch').hidden = !caps.torch;
@@ -138,12 +145,27 @@ function alertLine(text) { $('stats').textContent = text; setTimeout(renderStats
 // 'via' (aspetto che la carta esca, così una carta tenuta ferma non conta due volte).
 let state = 'cerca', lastQuad = null, still = 0, gone = 0;
 const STILL = 3, GONE = 4, MOVE = 0.015; // fotogrammi fermi, fotogrammi senza carta, spostamento tollerato
-const HINT = { cerca: 'Inquadra una carta su un fondo scuro', ferma: 'Tieni ferma…', leggo: 'Riconosco…', via: 'Fatto: togli la carta e mettine un\'altra' };
+const HINT = { cerca: 'Inquadra una carta su un fondo scuro', ferma: 'Tieni ferma…', scatto: 'Scatto la foto…', leggo: 'Riconosco…', via: 'Fatto: togli la carta e mettine un\'altra' };
 
 const canvas = (w, h) => { const c = Object.assign(document.createElement('canvas'), { width: w, height: h }), x = c.getContext('2d', { willReadFrequently: true }); x.imageSmoothingQuality = 'high'; return [c, x]; };
 const [cardHi, cardHiCtx] = canvas(OCR_W, OCR_H), [card, cardCtx] = canvas(CARD_W, CARD_H), [sq, sqCtx] = canvas(SIZE, SIZE);
 
 const moved = (a, b, size) => a.some(([x, y], i) => Math.hypot(x - b[i][0], y - b[i][1]) > MOVE * size);
+
+// Foto vera al posto del fotogramma video: più nitida, così si legge anche il numero in fondo alla carta.
+// null se il telefono non scatta o se nella foto non si trovano i bordi: allora si usa il video.
+async function stillPhoto() {
+  if (!imageCapture) return null;
+  try {
+    const bmp = await createImageBitmap(await imageCapture.takePhoto(photoSize));
+    const k = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
+    const c = Object.assign(document.createElement('canvas'), { width: Math.round(bmp.width * k), height: Math.round(bmp.height * k) });
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    bmp.close();
+    const q = findCard(c, c.width, c.height);
+    return q && { c, q };
+  } catch (e) { console.warn('scatto', e); return null; }
+}
 
 // Raddrizza la carta nella versione grande (per leggere) e da lì quella piccola (per il disegno).
 function capture(src, w, h, quad) {
@@ -164,8 +186,11 @@ async function tick() {
       still = q && lastQuad && !moved(q, lastQuad, Math.max(w, h)) ? still + 1 : 0;
       if (still >= STILL) {
         state = 'risultato';
+        $('hint').textContent = HINT.scatto;
+        const t0 = performance.now(), shot = await stillPhoto();
         $('hint').textContent = HINT.leggo;
-        capture(video, w, h, q);
+        if (shot) capture(shot.c, shot.c.width, shot.c.height, shot.q); else capture(video, w, h, q);
+        shotInfo = shot ? `foto ${shot.c.width}×${shot.c.height} in ${Math.round(performance.now() - t0)} ms` : `video${imageCapture ? ' (foto non riuscita)' : ''}`;
         await recognize();
       }
     }
@@ -215,7 +240,7 @@ async function recognize() {
     const ids = t => t.map(([, i]) => cards[i][0]);
     const tc = topK(sc, 5);
     pending = {
-      t: Date.now(), b: sleeve ? 1 : 0, ms: Math.round(performance.now() - t0), msOcr: Math.round(performance.now() - t1),
+      t: Date.now(), b: sleeve ? 1 : 0, src: shotInfo, ms: Math.round(performance.now() - t0), msOcr: Math.round(performance.now() - t1),
       c: ids(tc), s: tc.map(([s]) => +(s / 2).toFixed(3)), a: ids(topK(sa, 5)), f: ids(topK(sf, 5)), px: lumaStats(),
       pi: cards[print.i][0], pl: print.lang, sure: print.sure ? 1 : 0, rl: read.lang, rn: read.number?.num ?? null, rt: read.number?.total ?? null,
       ranked: [...new Set(print.ranked.map(r => cards[r.i][0]))].slice(0, 5),
@@ -281,7 +306,9 @@ function decide(pick) {
 // (0,85 come il gruppo usato per scegliere la stampa: le gemelle giapponesi scendono fino a lì).
 const sameArt = (a, b) => a === b || (!!a && !!b && (byId.get(a)[1] === byId.get(b)[1] || artSim(artCat, idx.get(a), idx.get(b)) >= 0.85));
 function summary(list) {
-  const prints = list.filter(r => r.pi), right = r => r.p === r.pi && r.l === r.pl, sure = prints.filter(r => r.sure);
+  // Cinesi e coreane non hanno stampe in catalogo: basta lingua giusta e stesso disegno.
+  const right = r => r.l === r.pl && (r.p === r.pi || (['zh', 'ko'].includes(r.l) && sameArt(r.p, r.pi)));
+  const prints = list.filter(r => r.pi), sure = prints.filter(r => r.sure);
   const n = list.length, hit = (k, m) => list.filter(r => r.p && r[m].slice(0, k).some(id => sameArt(id, r.p))).length;
   return {
     n, top1: hit(1, 'c'), top5: hit(5, 'c'), np: prints.length, ok: prints.filter(right).length,
@@ -353,6 +380,7 @@ $('file').addEventListener('change', async e => {
   const pic = Object.assign(document.createElement('canvas'), { width: Math.round(bmp.width * k), height: Math.round(bmp.height * k) });
   pic.getContext('2d').drawImage(bmp, 0, 0, pic.width, pic.height);
   capture(pic, pic.width, pic.height, findCard(pic, pic.width, pic.height));
+  shotInfo = 'galleria';
   state = 'risultato';
   await recognize();
 });
