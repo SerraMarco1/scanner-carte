@@ -27,3 +27,5 @@ jobs:
           path: web
       - id: deploy
         uses: actions/deploy-pages@v5
+        with:
+          timeout: 1800000 # 30 minuti: con il catalogo grande GitHub a volte supera i 10 predefiniti
