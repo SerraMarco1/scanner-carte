@@ -530,7 +530,7 @@ public class ScannerPlugin extends Plugin {
 
     private static JSArray toJs(float[] v) {
         JSArray a = new JSArray();
-        for (float f : v) a.put((double) f);
+        for (float f : v) a.put(Double.valueOf(f)); // put(Object): put(double) dichiara JSONException
         return a;
     }
 
