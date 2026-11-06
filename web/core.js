@@ -72,3 +72,44 @@ export function topK(scores, k = 5) {
   }
   return best;
 }
+
+// Distanza tra due scritte (quante lettere cambiare): accetta un numero letto con una cifra sbagliata.
+export function distance(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] !== b[j - 1]));
+  return d[a.length][b.length];
+}
+export const normNum = s => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^0+(?=\d)/, '');
+
+// Stampe candidate: le carte col disegno vicino al primo posto, più tutte quelle con lo stesso disegno
+// (ristampe e gemelle giapponesi). sc = punteggi combinati (illustrazione + carta intera).
+export function candidatePrints(sc, artCat, k = 10, gap = 0.12, same = 0.85) {
+  const top = topK(sc, k), seeds = top.filter(([s]) => top[0][0] - s <= gap).map(([, i]) => i);
+  const out = new Map(seeds.map(i => [i, sc[i]]));
+  const n = artCat.length / DIM;
+  for (const s of seeds.slice(0, 3)) for (let j = 0; j < n; j++) if (!out.has(j) && artSim(artCat, s, j) >= same) out.set(j, sc[j]);
+  return [...out].map(([i, vis]) => ({ i, vis }));
+}
+
+// Sceglie la stampa: punti per lingua, numero e totale del set letti sulla carta, meno il distacco nel disegno.
+// rows = righe del catalogo [id, nome, set, numero, lingua, immagine, totale, lingue]; read = esito di readCard.
+// «sure» solo se stacca bene la seconda: altrimenti l'app chiede conferma.
+export function choosePrint(cands, rows, read) {
+  const want = read?.lang, n = read?.number, asian = want === 'zh' || want === 'ko';
+  const top = Math.max(...cands.map(c => c.vis));
+  const ranked = cands.map(({ i, vis }) => {
+    const [, , , num, lang, , total, mask] = rows[i], jp = lang === 'ja';
+    let s = (vis - top) * 10; // −1 ogni 0,1 di distacco dal disegno più simile
+    if (want === 'ja' || asian) s += jp ? 3 : -3; // cinesi e coreane: la gemella giapponese è la più vicina
+    else if (want) s += jp ? -3 : want === 'en' || mask & LANG_BITS[want] ? 3 : 1.5;
+    const cn = normNum(String(num).split('/')[0]);
+    if (n?.num) { const d = distance(normNum(n.num), cn); s += d === 0 ? 3 : d === 1 && cn.length > 1 ? 1.5 : 0; }
+    else if (cn.length > 1 && normNum(n?.bottom).includes(cn)) s += 1.5;
+    if (n?.total && total) { const d = distance(normNum(n.total), normNum(total)); s += d === 0 ? 1 : d === 1 ? 0.5 : 0; }
+    return { i, s, lang: asian ? want : jp ? 'ja' : want && want in LANG_BITS ? want : 'en' };
+  }).sort((a, b) => b.s - a.s);
+  const [first, second] = ranked;
+  return { ...first, sure: !!want && !asian && first.s >= 3 && (!second || first.s - second.s >= 1.5), ranked };
+}

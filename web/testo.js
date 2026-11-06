@@ -1,6 +1,7 @@
 // Legge il testo della carta raddrizzata (PaddleOCR v5 mobile) e ne ricava lingua e numero.
 // Gira uguale sul telefono (onnxruntime-web) e sul PC (onnxruntime-node): riceve pixel RGBA e sessioni.
 
+
 const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
 
 // Ritaglio (x0, y0, w, h) dell'immagine RGBA ridimensionato a dw×dh, bilineare.
@@ -79,7 +80,7 @@ const WORDS = {
   en: ['weakness', 'retreat', 'evolves from', 'ability', 'your turn', 'opponent', 'damage', 'attach', 'discard', 'this pokemon',
     'basic', 'stage', 'supporter', 'stadium', 'lbs', 'ht', 'wt', 'your', 'card', 'cards'], // «trainer» e «item» anche in tedesco
   it: ['debolezza', 'ritirata', 'si evolve da', 'abilita', 'tuo turno', 'avversario', 'danni', 'assegna', 'scarta', 'questo pokemon',
-    'resistenza', 'base', 'fase', 'allenatore', 'aiuto', 'strumento', 'stadio', 'altezza', 'tuo', 'carta', 'carte', 'energia'],
+    'resistenza', 'fase', 'allenatore', 'aiuto', 'strumento', 'stadio', 'altezza', 'tuo', 'carta', 'carte', 'energia'],
   fr: ['faiblesse', 'retraite', 'evolue de', 'talent', 'votre tour', 'adversaire', 'degats', 'attachez', 'defaussez', 'ce pokemon',
     'de base', 'niveau', 'dresseur', 'objet', 'stade', 'taille', 'poids', 'votre', 'carte'],
   de: ['schwache', 'ruckzug', 'entwickelt sich', 'fahigkeit', 'deines zuges', 'gegner', 'schadenspunkte', 'dieses pokemon',
@@ -128,15 +129,6 @@ export function cardNumber(lines, height) {
     if (promo) return { num: promo[1] + fix(promo[2]), total: null, bottom };
   }
   return bottom ? { num: null, total: null, bottom } : null;
-}
-
-// Distanza tra due scritte (quante lettere cambiare): per accettare un numero letto con una cifra sbagliata.
-export function distance(a, b) {
-  const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
-  for (let j = 1; j <= b.length; j++) d[0][j] = j;
-  for (let i = 1; i <= a.length; i++)
-    for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] !== b[j - 1]));
-  return d[a.length][b.length];
 }
 
 // Tutta la lettura: ogni riga con il lettore latino; se la lingua non esce, il lettore asiatico
