@@ -5,10 +5,12 @@ import { CARD_W, CARD_H, SIZE, DIM, artRect, toTensorData, normalize, scoreAll, 
 
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
 const MODEL_URL = 'https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/';
+// fp16: impronte uguali a quelle del catalogo (somiglianza 0,9999); la versione int8 se ne allontana (0,985).
+const MODEL_FILE = 'model_fp16.onnx';
 const STORE = 'scanner-proto-risultati';
 const $ = id => document.getElementById(id);
 
-let session, backend, modelFile, cards, byId, artCat, fullCat, track;
+let session, backend, cards, byId, artCat, fullCat, track;
 let lang = 'it', sleeve = false, pending = null, torchOn = false;
 let results = [];
 try { results = JSON.parse(localStorage.getItem(STORE)) || []; } catch { /* memoria non disponibile */ }
@@ -46,15 +48,11 @@ async function getBytes(url, label, keep) {
 
 async function startModel() {
   const gpu = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null;
-  const tries = gpu ? [['webgpu', 'model_fp16.onnx'], ['wasm', 'model_quantized.onnx']] : [['wasm', 'model_quantized.onnx']];
-  for (const [ep, file] of tries) {
-    try {
-      const bytes = await getBytes(MODEL_URL + file, 'modello', true);
-      loading('Avvio il riconoscimento…');
-      session = await ort.InferenceSession.create(bytes, { executionProviders: [ep] });
-      [backend, modelFile] = [ep, file];
-      return;
-    } catch (e) { console.warn(ep, e); }
+  const bytes = await getBytes(MODEL_URL + MODEL_FILE, 'modello', true);
+  loading('Avvio il riconoscimento…');
+  for (const ep of gpu ? ['webgpu', 'wasm'] : ['wasm']) {
+    try { session = await ort.InferenceSession.create(bytes, { executionProviders: [ep] }); backend = ep; return; }
+    catch (e) { console.warn(ep, e); }
   }
   throw new Error('Il modello non parte su questo telefono.');
 }
@@ -192,13 +190,13 @@ function openMenu() {
   t.innerHTML = `<tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>`;
   for (const r of tableRows()) { const tr = t.insertRow(); r.forEach(v => { tr.insertCell().textContent = v; }); }
   $('table').replaceChildren(results.length ? t : Object.assign(document.createElement('p'), { textContent: 'Ancora nessuna scansione.' }));
-  $('tech').textContent = `Catalogo: ${cards.length} carte · motore: ${backend} (${modelFile})`;
+  $('tech').textContent = `Catalogo: ${cards.length} carte · motore: ${backend} (${MODEL_FILE})`;
   $('copyText').style.display = 'none';
   $('menu').classList.add('show');
 }
 
 async function copyResults() {
-  const lines = ['SCANNER CARTE — risultati prototipo', `motore ${backend} ${modelFile} · catalogo ${cards.length} · ${navigator.userAgent}`,
+  const lines = ['SCANNER CARTE — risultati prototipo', `motore ${backend} ${MODEL_FILE} · catalogo ${cards.length} · ${navigator.userAgent}`,
     'gruppo | n | 1° posto | prime 5 | solo disegno | carta intera | ms', ...tableRows().map(r => r.join(' | ')),
     'DATI', ...results.map(r => JSON.stringify(r))];
   const text = lines.join('\n');
