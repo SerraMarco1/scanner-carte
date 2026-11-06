@@ -48,6 +48,9 @@ export function scoreAll(q, cat, dim = DIM) {
   return out;
 }
 
+// Lingue internazionali in cui una carta inglese del catalogo esiste anche (campo `langs`, a bit).
+export const LANG_BITS = { it: 1, fr: 2, de: 4, es: 8, pt: 16 };
+
 // Due stampe hanno lo stesso disegno se le loro illustrazioni nel catalogo sono quasi identiche.
 // Misurato: disegni diversi stanno quasi sempre sotto 0,90; gemelle inglese/giapponese tra 0,90 e 0,97.
 export const SAME_ART = 0.92;

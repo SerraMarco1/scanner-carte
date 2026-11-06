@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
 import { CARD_W, CARD_H, scoreAll, topK, artSim, SAME_ART } from '../web/core.js';
-import { ROOT, CACHE, fetchRetry, pool, loadSession, crops, embed } from './lib.mjs';
+import { ROOT, CACHE, fetchRetry, pool, loadSession, crops, embed, photoLike } from './lib.mjs';
 
 const arg = (k, d) => process.argv.find(a => a.startsWith(`--${k}=`))?.split('=')[1] ?? d;
 const N = Number(arg('n', 300)), MODEL = arg('modello', 'model.onnx');
@@ -49,22 +49,6 @@ groups['Italiane → catalogo inglese'] = itSample
   .map(c => ({ file: path.join(CACHE, 'img/it', `${safe(c.id)}.webp`), expect: index.get(c.id) }))
   .filter(q => existsSync(q.file));
 
-// Una foto finta: carta ruotata e fuori centro, luce e colori diversi, sfocata, con riflesso, compressa.
-async function photoLike(file) {
-  const card = await sharp(file).resize(CARD_W, CARD_H, { fit: 'fill' }).toBuffer();
-  const rot = await sharp(card).rotate((rnd() * 2 - 1) * 3, { background: '#1e1e1e' }).toBuffer();
-  const m = await sharp(rot).metadata();
-  const clamp = (v, max) => Math.max(0, Math.min(max, v));
-  const left = clamp(Math.round((m.width - CARD_W) / 2 + (rnd() * 2 - 1) * 0.04 * CARD_W), m.width - CARD_W);
-  const top = clamp(Math.round((m.height - CARD_H) / 2 + (rnd() * 2 - 1) * 0.04 * CARD_H), m.height - CARD_H);
-  const shot = await sharp(rot).extract({ left, top, width: CARD_W, height: CARD_H })
-    .modulate({ brightness: 0.75 + rnd() * 0.5, saturation: 0.8 + rnd() * 0.4 })
-    .blur(0.3 + rnd()).toBuffer();
-  const [gx, gy, r, op] = [rnd() * CARD_W, rnd() * CARD_H, 40 + rnd() * 80, 0.25 + rnd() * 0.35];
-  const glare = `<svg width="${CARD_W}" height="${CARD_H}"><defs><radialGradient id="g"><stop offset="0" stop-color="#fff" stop-opacity="${op}"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><ellipse cx="${gx}" cy="${gy}" rx="${r}" ry="${r * 0.7}" fill="url(#g)"/></svg>`;
-  return sharp(shot).composite([{ input: Buffer.from(glare) }]).jpeg({ quality: 55 + Math.floor(rnd() * 30) }).toBuffer();
-}
-
 // Giusta = stesso disegno: stessa carta, ristampa con lo stesso nome, o gemella in un'altra lingua.
 const sameArt = (i, j) => i === j || cards[i].name === cards[j].name || artSim(artCat, i, j) >= SAME_ART;
 
@@ -74,7 +58,7 @@ const all = [];
 for (const [name, qs] of Object.entries(groups)) {
   const res = { art: [0, 0], full: [0, 0], comb: [0, 0] };
   for (const q of qs) {
-    const c = await crops(await photoLike(q.file));
+    const c = await crops(await photoLike(q.file, rnd));
     const [va] = await embed(session, [c.art]);
     const [vf] = await embed(session, [c.full]);
     const sa = scoreAll(va, artCat), sf = scoreAll(vf, fullCat), sc = sa.map((s, i) => s + sf[i]);

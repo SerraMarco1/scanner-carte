@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
 import ort from 'onnxruntime-node';
-import { CARD_W, CARD_H, SIZE, DIM, ART, quantize, normalize, probeInput } from '../web/core.js';
+import { CARD_W, CARD_H, SIZE, DIM, ART, quantize, normalize, probeInput, LANG_BITS } from '../web/core.js';
 import { ROOT, CACHE, fetchRetry, pool, loadSession, crops, embed } from './lib.mjs';
 
 const LIMIT = Number(process.argv.find(a => a.startsWith('--limit='))?.slice(8)) || Infinity;
@@ -21,11 +21,16 @@ const safe = s => s.replace(/[^A-Za-z0-9._-]/g, '_');
 
 async function englishCards() {
   const list = await fetchRetry('https://api.tcgdex.net/v2/en/cards');
-  const sets = Object.fromEntries((await fetchRetry('https://api.tcgdex.net/v2/en/sets')).map(s => [s.id, s.name]));
+  const sets = Object.fromEntries((await fetchRetry('https://api.tcgdex.net/v2/en/sets')).map(s => [s.id, s]));
+  // In quali altre lingue TCGdex conosce la stessa carta (stesso id): aiuta a scegliere la stampa.
+  const langs = {};
+  for (const [lang, bit] of Object.entries(LANG_BITS))
+    for (const c of await fetchRetry(`https://api.tcgdex.net/v2/${lang}/cards`)) langs[c.id] = (langs[c.id] || 0) | bit;
   // /tcgp/ = TCG Pocket: carte solo digitali, non esistono stampate.
   return list.filter(c => c.image && !c.image.includes('/tcgp/')).slice(0, LIMIT).map(c => {
-    const setId = c.image.split('/').at(-2);
-    return { id: c.id, name: c.name, set: sets[setId] || setId, num: c.localId, lang: 'en',
+    const set = sets[c.image.split('/').at(-2)];
+    return { id: c.id, name: c.name, set: set?.name || c.image.split('/').at(-2), num: c.localId, lang: 'en',
+      total: String(set?.cardCount?.official ?? ''), langs: langs[c.id] || 0,
       img: c.image + '/low.webp', file: `en/${safe(c.id)}.webp` };
   });
 }
@@ -41,7 +46,7 @@ async function japaneseCards() {
       try { c = JSON.parse(await fs.readFile(path.join(dir, set, f), 'utf8')); } catch { continue; }
       if (!c.img || !c.jp_id) continue;
       out.push({ id: `jp-${c.jp_id}`, name: c.name, set: c.set_name || set,
-        num: c.set_total ? `${c.number}/${c.set_total}` : (c.number || ''), lang: 'ja',
+        num: c.set_total ? `${c.number}/${c.set_total}` : (c.number || ''), lang: 'ja', total: c.set_total || '', langs: 0,
         img: c.img, file: `ja/${c.jp_id}.webp`, jpId: c.jp_id });
     }
   }
@@ -107,8 +112,8 @@ await fs.writeFile(path.join(OUT, 'art.bin'), art);
 await fs.writeFile(path.join(OUT, 'full.bin'), full);
 await fs.writeFile(path.join(OUT, 'cards.json'), JSON.stringify({
   built: new Date().toISOString(), model: 'onnx-community/dinov2-small@8b1f705', dim: DIM, crop: ART,
-  fields: ['id', 'name', 'set', 'num', 'lang', 'img'],
-  cards: cards.map(c => [c.id, c.name, c.set, c.num, c.lang, c.img]),
+  fields: ['id', 'name', 'set', 'num', 'lang', 'img', 'total', 'langs'],
+  cards: cards.map(c => [c.id, c.name, c.set, c.num, c.lang, c.img, c.total, c.langs]),
 }));
 console.log(`Scritto web/data: ${cards.length} carte`);
 console.timeEnd('catalogo');

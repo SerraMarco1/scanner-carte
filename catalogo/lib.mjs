@@ -58,3 +58,20 @@ export async function embed(session, raws) {
   const h = out.last_hidden_state, tokens = h.dims[1];
   return raws.map((_, i) => normalize(h.data.subarray(i * tokens * DIM, i * tokens * DIM + DIM)));
 }
+
+// Una foto finta: carta ruotata e fuori centro, luce e colori diversi, sfocata, con riflesso, compressa.
+// rnd = generatore casuale del test (con seme fisso, così il test si ripete uguale).
+export async function photoLike(input, rnd, W = CARD_W, H = CARD_H) {
+  const card = await sharp(input).resize(W, H, { fit: 'fill' }).toBuffer();
+  const rot = await sharp(card).rotate((rnd() * 2 - 1) * 3, { background: '#1e1e1e' }).toBuffer();
+  const m = await sharp(rot).metadata();
+  const clamp = (v, max) => Math.max(0, Math.min(max, v));
+  const left = clamp(Math.round((m.width - W) / 2 + (rnd() * 2 - 1) * 0.04 * W), m.width - W);
+  const top = clamp(Math.round((m.height - H) / 2 + (rnd() * 2 - 1) * 0.04 * H), m.height - H);
+  const shot = await sharp(rot).extract({ left, top, width: W, height: H })
+    .modulate({ brightness: 0.75 + rnd() * 0.5, saturation: 0.8 + rnd() * 0.4 })
+    .blur(0.3 + rnd()).toBuffer();
+  const [gx, gy, r, op] = [rnd() * W, rnd() * H, (40 + rnd() * 80) * W / CARD_W, 0.25 + rnd() * 0.35];
+  const glare = `<svg width="${W}" height="${H}"><defs><radialGradient id="g"><stop offset="0" stop-color="#fff" stop-opacity="${op}"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><ellipse cx="${gx}" cy="${gy}" rx="${r}" ry="${r * 0.7}" fill="url(#g)"/></svg>`;
+  return sharp(shot).composite([{ input: Buffer.from(glare) }]).jpeg({ quality: 55 + Math.floor(rnd() * 30) }).toBuffer();
+}
