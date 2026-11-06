@@ -31,7 +31,9 @@ async function getBytes(url, label, keep) {
   }
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${label}: errore ${r.status}`);
-  const total = Number(r.headers.get('content-length')) || 0, reader = r.body.getReader(), parts = [];
+  // Con un file compresso la dimensione dichiarata non corrisponde ai byte letti: niente totale.
+  const total = r.headers.get('content-encoding') ? 0 : Number(r.headers.get('content-length')) || 0;
+  const reader = r.body.getReader(), parts = [];
   let got = 0;
   for (;;) {
     const { done, value } = await reader.read();
