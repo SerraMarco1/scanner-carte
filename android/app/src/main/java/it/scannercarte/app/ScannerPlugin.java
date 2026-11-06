@@ -526,6 +526,22 @@ public class ScannerPlugin extends Plugin {
         call.resolve(cameraInfo());
     }
 
+    // Errore che ha chiuso l'app l'ultima volta (scritto da MainActivity), poi cancellato.
+    @PluginMethod
+    public void lastCrash(PluginCall call) {
+        File f = new File(getContext().getFilesDir(), "crash.txt");
+        JSObject o = new JSObject();
+        try {
+            if (f.exists()) {
+                o.put("text", new String(java.nio.file.Files.readAllBytes(f.toPath())));
+                f.delete();
+            }
+        } catch (Exception e) {
+            o.put("text", "crash.txt illeggibile: " + e.getMessage());
+        }
+        call.resolve(o);
+    }
+
     // ---------- utilità ----------
 
     private static JSArray toJs(float[] v) {

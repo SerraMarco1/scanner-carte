@@ -19,7 +19,7 @@ const STORE = 'scanner-proto-risultati', CAM = 'scanner-proto-obiettivo', LAST_L
 const LANGS = { it: 'italiano', en: 'inglese', fr: 'francese', de: 'tedesco', es: 'spagnolo', pt: 'portoghese', ja: 'giapponese', zh: 'cinese', ko: 'coreano' };
 const $ = id => document.getElementById(id);
 
-let session, backend, ocr, cards, byId, idx, artCat, fullCat, track, shotInfo = '', nativeInfo = null;
+let session, backend, ocr, cards, byId, idx, artCat, fullCat, track, shotInfo = '', nativeInfo = null, crash = '';
 let sleeve = false, pending = null, torchOn = false, cams = [], checks = [], pickLang = 'it', lastLang = 'it';
 try { lastLang = localStorage.getItem(LAST_LANG) || 'it'; } catch { /* si parte dall'italiano */ }
 let results = [];
@@ -117,6 +117,7 @@ const camInfo = () => {
 // APK: fotocamera nativa, poi modello verificato come nella versione web (deve ridare l'impronta del PC).
 async function startNative() {
   document.documentElement.classList.add('native');
+  crash = (await Scanner.lastCrash()).text || ''; // errore che ha chiuso l'app l'ultima volta
   loading('Accendo la fotocamera…');
   nativeInfo = await Scanner.start();
   loading('Avvio il riconoscimento…');
@@ -157,6 +158,7 @@ async function init() {
     }
     $('loading').remove();
     renderStats();
+    if (crash) alertLine("L'app si era chiusa per un errore: lo trovi in Risultati.");
     if (!NATIVE) tick();
   } catch (e) {
     loading(`Qualcosa non va: ${e.message}. Ricarica la pagina per riprovare.`);
@@ -395,7 +397,7 @@ function openMenu() {
   t.innerHTML = `<tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>`;
   for (const r of tableRows()) { const tr = t.insertRow(); r.forEach(v => { tr.insertCell().textContent = v; }); }
   $('table').replaceChildren(results.length ? t : Object.assign(document.createElement('p'), { textContent: 'Ancora nessuna scansione.' }));
-  $('tech').textContent = `Catalogo: ${cards.length} carte · motore: ${backend} (verifica ${checks.join(", ")}, isolata ${self.crossOriginIsolated}) · fotocamera: ${camInfo()}`;
+  $('tech').textContent = (crash ? `ULTIMO ERRORE: ${crash.slice(0, 400)} · ` : '') + `Catalogo: ${cards.length} carte · motore: ${backend} (verifica ${checks.join(", ")}, isolata ${self.crossOriginIsolated}) · fotocamera: ${camInfo()}`;
   $('copyText').style.display = 'none';
   $('menu').classList.add('show');
 }
@@ -403,7 +405,7 @@ function openMenu() {
 async function copyResults() {
   const lines = ['SCANNER CARTE — risultati prototipo', `motore ${backend} · verifica ${checks.join(" ")} · isolata ${self.crossOriginIsolated} · catalogo ${cards.length} · fotocamera ${camInfo()} · ${navigator.userAgent}`,
     'gruppo | n | stampa giusta | da sole | errate tra le da sole | disegno 1° | prime 5 | ms', ...tableRows().map(r => r.join(' | ')),
-    'DATI', ...results.map(r => JSON.stringify(r))];
+    ...(crash ? ['ERRORE', crash.slice(0, 3000)] : []), 'DATI', ...results.map(r => JSON.stringify(r))];
   const text = lines.join('\n');
   try { await navigator.clipboard.writeText(text); $('copy').textContent = 'Copiati: incollali in chat'; }
   catch { const ta = $('copyText'); ta.value = text; ta.style.display = 'block'; ta.focus(); ta.select(); }
