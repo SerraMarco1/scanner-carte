@@ -1,0 +1,6 @@
+{
+  "appId": "it.scannercarte.app",
+  "appName": "Scanner Carte",
+  "webDir": "web",
+  "android": { "backgroundColor": "#00000000" }
+}

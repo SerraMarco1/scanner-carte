@@ -1,0 +1,57 @@
+name: Costruisci l'APK
+on:
+  push:
+    branches: [main]
+    paths: ['web/**', 'android/**', 'capacitor.config.json', 'package.json', 'package-lock.json', '.github/workflows/apk.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write # per pubblicare l'APK tra le «release» del repository
+
+concurrency:
+  group: apk
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - name: Modello delle impronte (stesso del catalogo, versione completa)
+        run: curl -sfL -o android/app/src/main/assets/model.onnx "https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/model.onnx"
+      - name: Pagina dentro l'app
+        run: npx cap sync android
+      - name: APK
+        working-directory: android
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: scanner
+          VERSION_CODE: ${{ github.run_number }}
+        run: |
+          chmod +x gradlew
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/scanner.jks"
+            export KEYSTORE_FILE="$RUNNER_TEMP/scanner.jks"
+            ./gradlew assembleRelease --no-daemon
+            cp app/build/outputs/apk/release/app-release.apk ../scanner-carte.apk
+          else
+            echo "::warning::Manca la chiave fissa nei segreti: APK firmato con una chiave di prova, ogni aggiornamento va installato dopo aver disinstallato il precedente"
+            ./gradlew assembleDebug --no-daemon
+            cp app/build/outputs/apk/debug/app-debug.apk ../scanner-carte.apk
+          fi
+      - name: Pubblica l'APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete apk --yes --cleanup-tag || true
+          gh release create apk scanner-carte.apk --title "Scanner Carte · APK ${{ github.run_number }}" \
+            --notes "Ultima versione dell'app Android. Sul telefono: scarica scanner-carte.apk e aprilo per installarlo."

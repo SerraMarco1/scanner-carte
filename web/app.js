@@ -1,12 +1,15 @@
 // Prototipo dello scanner: misura quanto spesso l'app trova da sola la stampa esatta delle carte vere.
 // La carta viene trovata e raddrizzata da sola; la scansione parte quando resta ferma.
 // Disegno (impronte) + testo letto (lingua e numero) → stampa scelta.
-import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.webgpu.min.mjs';
+// Nell'APK Android fotocamera, bordi, impronte e lettura sono nativi (ScannerPlugin.java); qui resta il resto.
 import { CARD_W, CARD_H, SIZE, DIM, artRect, toTensorData, normalize, scoreAll, topK, artSim, probeInput, candidatePrints, choosePrint } from './core.js';
 import { loadCV, findCard, warpCard } from './bordi.js';
-import { readCard } from './testo.js';
+import { readCard, latinLanguage, asianLanguage, cardNumber } from './testo.js';
 
-ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
+const NATIVE = !!window.Capacitor?.isNativePlatform?.();
+const Scanner = NATIVE ? window.Capacitor.registerPlugin('Scanner') : null;
+const ORT_DIST = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
+let ort; // solo nella versione web: nell'APK il modello gira nativo
 const MODEL_URL = 'https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/';
 const OCR_URL = 'https://huggingface.co/nakamura196/ppocrv5-mobile-web-onnx/resolve/dc7e2271c00d961a4c0a38dcebe23beb735ba33e/';
 // fp16: impronte uguali a quelle del catalogo (somiglianza 0,9999); la versione int8 se ne allontana (0,985).
@@ -16,7 +19,7 @@ const STORE = 'scanner-proto-risultati', CAM = 'scanner-proto-obiettivo', LAST_L
 const LANGS = { it: 'italiano', en: 'inglese', fr: 'francese', de: 'tedesco', es: 'spagnolo', pt: 'portoghese', ja: 'giapponese', zh: 'cinese', ko: 'coreano' };
 const $ = id => document.getElementById(id);
 
-let session, backend, ocr, cards, byId, idx, artCat, fullCat, track, shotInfo = '';
+let session, backend, ocr, cards, byId, idx, artCat, fullCat, track, shotInfo = '', nativeInfo = null;
 let sleeve = false, pending = null, torchOn = false, cams = [], checks = [], pickLang = 'it', lastLang = 'it';
 try { lastLang = localStorage.getItem(LAST_LANG) || 'it'; } catch { /* si parte dall'italiano */ }
 let results = [];
@@ -105,7 +108,30 @@ async function startCamera(deviceId) {
   try { localStorage.setItem(CAM, track.getSettings().deviceId); } catch { /* si riparte dall'obiettivo predefinito */ }
 }
 
-const camInfo = () => { const s = track?.getSettings?.() || {}; return track ? `${s.width}×${s.height} «${track.label}»` : 'nessuna'; };
+const camInfo = () => {
+  if (NATIVE) return nativeInfo ? `analisi ${nativeInfo.frame}, obiettivo ${nativeInfo.index + 1} di ${nativeInfo.cameras}` : 'nessuna';
+  const s = track?.getSettings?.() || {};
+  return track ? `${s.width}×${s.height} «${track.label}»` : 'nessuna';
+};
+
+// APK: fotocamera nativa, poi modello verificato come nella versione web (deve ridare l'impronta del PC).
+async function startNative() {
+  document.documentElement.classList.add('native');
+  loading('Accendo la fotocamera…');
+  nativeInfo = await Scanner.start();
+  loading('Avvio il riconoscimento…');
+  const { probe: pv } = await Scanner.prepare();
+  const probe = (await (await fetch('data/probe.json')).json()).v;
+  const sim = pv.reduce((a, x, i) => a + x * probe[i], 0);
+  checks.push(`nativo ${sim.toFixed(3)}`);
+  backend = 'nativo';
+  if (sim < 0.98) throw new Error(`il riconoscimento dà risultati sbagliati su questo telefono (${checks.join(', ')})`);
+  nativeInfo = await Scanner.info();
+  $('switchCam').hidden = nativeInfo.cameras < 2;
+  $('torch').hidden = !nativeInfo.torch;
+  Scanner.addListener('frame', onNativeFrame);
+  Scanner.addListener('error', e => console.warn(e.message));
+}
 
 async function init() {
   try {
@@ -115,18 +141,23 @@ async function init() {
     idx = new Map(cards.map((c, i) => [c[0], i]));
     artCat = new Int8Array((await getBytes('data/art.bin', 'impronte illustrazioni')).buffer);
     fullCat = new Int8Array((await getBytes('data/full.bin', 'impronte carte')).buffer);
-    loading('Scarico il rilevatore dei bordi (circa 10 MB)…');
-    await loadCV();
-    await startModel();
-    await startOcr();
-    loading('Accendo la fotocamera…');
-    let saved = null;
-    try { saved = localStorage.getItem(CAM); } catch { /* nessun obiettivo salvato */ }
-    try { await startCamera(saved); }
-    catch { try { await startCamera(); } catch { alertLine('Fotocamera non disponibile: puoi comunque usare «Da foto».'); } }
+    if (NATIVE) await startNative();
+    else {
+      ort = await import(ORT_DIST + 'ort.webgpu.min.mjs');
+      ort.env.wasm.wasmPaths = ORT_DIST;
+      loading('Scarico il rilevatore dei bordi (circa 10 MB)…');
+      await loadCV();
+      await startModel();
+      await startOcr();
+      loading('Accendo la fotocamera…');
+      let saved = null;
+      try { saved = localStorage.getItem(CAM); } catch { /* nessun obiettivo salvato */ }
+      try { await startCamera(saved); }
+      catch { try { await startCamera(); } catch { alertLine('Fotocamera non disponibile: puoi comunque usare «Da foto».'); } }
+    }
     $('loading').remove();
     renderStats();
-    tick();
+    if (!NATIVE) tick();
   } catch (e) {
     loading(`Qualcosa non va: ${e.message}. Ricarica la pagina per riprovare.`);
   }
@@ -179,6 +210,27 @@ async function tick() {
   setTimeout(tick, 100);
 }
 
+// APK: il modulo nativo manda ~10 volte al secondo se vede una carta e da quanti fotogrammi è ferma.
+function onNativeFrame({ found, still: s }) {
+  if (state === 'risultato') return;
+  if (state === 'via') {
+    gone = found ? 0 : gone + 1;
+    if (gone >= GONE) setState('cerca');
+  } else if (found && s >= STILL) {
+    setState('risultato');
+    $('hint').textContent = HINT.leggo;
+    shotInfo = 'nativo';
+    recognize();
+    return;
+  }
+  $('hint').textContent = state === 'via' ? HINT.via : found ? HINT.ferma : HINT.cerca;
+}
+
+function setState(s) {
+  state = s;
+  if (NATIVE) Scanner.setMode({ mode: s }); // colore del contorno disegnato dal modulo nativo
+}
+
 // Disegna il contorno trovato sopra il video (che è «cover»: va riproporzionato).
 function drawQuad(q, w, h) {
   const o = $('overlay'), r = o.getBoundingClientRect(), dpr = devicePixelRatio || 1;
@@ -206,14 +258,39 @@ async function embed(px) {
   return normalize(out.last_hidden_state.data.subarray(0, DIM));
 }
 
+// Versione web: impronte e lettura qui nella pagina.
+async function analyzeWeb() {
+  const t0 = performance.now();
+  const va = await embed(pixels(artRect()));
+  const vf = await embed(pixels({ left: 0, top: 0, width: CARD_W, height: CARD_H }));
+  const t1 = performance.now();
+  const read = await readCard(ort, ocr, cardHiCtx.getImageData(0, 0, OCR_W, OCR_H));
+  return { va, vf, read, msOcr: performance.now() - t1 };
+}
+
+// APK: impronte e lettura native; qui solo lingua e numero dalle righe lette (stesse regole della versione web).
+async function analyzeNative() {
+  const r = await Scanner.analyze(), t1 = performance.now();
+  const im = new Image();
+  im.src = r.seen;
+  await im.decode();
+  cardCtx.drawImage(im, 0, 0, CARD_W, CARD_H);
+  let lang = latinLanguage(r.lines);
+  if (!lang) {
+    const text = async script => (await Scanner.readAsian({ script })).lines.map(l => l.text).join(' ');
+    const ja = asianLanguage(await text('japanese'));
+    const a = ja === 'ja' ? 'ja' : asianLanguage(await text('korean')) === 'ko' ? 'ko' : ja;
+    if (a) lang = { lang: a };
+  }
+  const read = { lang: lang?.lang || null, number: cardNumber(r.lines, OCR_H) };
+  return { va: Float32Array.from(r.art), vf: Float32Array.from(r.full), read, msOcr: r.msOcr + performance.now() - t1 };
+}
+
 async function recognize() {
   try {
     const t0 = performance.now();
-    const va = await embed(pixels(artRect()));
-    const vf = await embed(pixels({ left: 0, top: 0, width: CARD_W, height: CARD_H }));
+    const { va, vf, read, msOcr } = NATIVE ? await analyzeNative() : await analyzeWeb();
     const sa = scoreAll(va, artCat), sf = scoreAll(vf, fullCat), sc = sa.map((s, i) => s + sf[i]);
-    const t1 = performance.now();
-    const read = await readCard(ort, ocr, cardHiCtx.getImageData(0, 0, OCR_W, OCR_H));
     // Lingua non letta: si usa l'ultima confermata (una pila di carte è quasi sempre di una lingua), ma si chiede.
     const guessed = !read.lang;
     if (guessed) read.lang = lastLang;
@@ -222,7 +299,7 @@ async function recognize() {
     const ids = t => t.map(([, i]) => cards[i][0]);
     const tc = topK(sc, 5);
     pending = {
-      t: Date.now(), b: sleeve ? 1 : 0, src: shotInfo, ms: Math.round(performance.now() - t0), msOcr: Math.round(performance.now() - t1),
+      t: Date.now(), b: sleeve ? 1 : 0, src: shotInfo, ms: Math.round(performance.now() - t0), msOcr: Math.round(msOcr),
       c: ids(tc), s: tc.map(([s]) => +(s / 2).toFixed(3)), a: ids(topK(sa, 5)), f: ids(topK(sf, 5)), px: lumaStats(),
       pi: cards[print.i][0], pl: print.lang, sure: print.sure ? 1 : 0, rl: guessed ? null : read.lang, rn: read.number?.num ?? null, rt: read.number?.total ?? null,
       ranked: [...new Set(print.ranked.map(r => cards[r.i][0]))].slice(0, 5),
@@ -231,7 +308,7 @@ async function recognize() {
     showCandidates();
   } catch (e) {
     alertLine(`Errore nel riconoscimento: ${e.message}`);
-    state = 'cerca';
+    setState('cerca');
   }
 }
 
@@ -277,7 +354,7 @@ function decide(pick) {
   if (pick !== undefined) { results.push({ ...pending, p: pick?.id ?? null, l: pick?.lang ?? null }); save(); }
   if (pick?.lang) { lastLang = pick.lang; try { localStorage.setItem(LAST_LANG, lastLang); } catch { /* resta in memoria */ } }
   pending = null;
-  state = pick === undefined ? 'cerca' : 'via';
+  setState(pick === undefined ? 'cerca' : 'via');
   still = gone = 0;
   $('hint').textContent = HINT[state];
   $('result').classList.remove('show');
@@ -346,10 +423,15 @@ $('reset').addEventListener('click', () => {
 $('sleeve').addEventListener('click', e => { sleeve = !sleeve; e.currentTarget.setAttribute('aria-pressed', sleeve); });
 $('torch').addEventListener('click', async () => {
   torchOn = !torchOn;
-  try { await track.applyConstraints({ advanced: [{ torch: torchOn }] }); } catch { torchOn = false; }
+  try { await (NATIVE ? Scanner.torch({ on: torchOn }) : track.applyConstraints({ advanced: [{ torch: torchOn }] })); } catch { torchOn = false; }
   $('torch').setAttribute('aria-pressed', torchOn);
 });
 $('switchCam').addEventListener('click', async () => {
+  if (NATIVE) {
+    try { nativeInfo = await Scanner.switchCamera(); alertLine(`Obiettivo ${nativeInfo.index + 1} di ${nativeInfo.cameras}`); }
+    catch { alertLine('Questo obiettivo non si apre: provane un altro.'); }
+    return;
+  }
   const now = cams.findIndex(d => d.deviceId === track?.getSettings().deviceId), next = (now + 1) % cams.length;
   try { await startCamera(cams[next].deviceId); alertLine(`Obiettivo ${next + 1} di ${cams.length}`); }
   catch { alertLine('Questo obiettivo non si apre: provane un altro.'); }
@@ -364,7 +446,7 @@ $('file').addEventListener('change', async e => {
   pic.getContext('2d').drawImage(bmp, 0, 0, pic.width, pic.height);
   capture(pic, pic.width, pic.height, findCard(pic, pic.width, pic.height));
   shotInfo = 'galleria';
-  state = 'risultato';
+  setState('risultato');
   await recognize();
 });
 
