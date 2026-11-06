@@ -10,6 +10,11 @@ Specifica completa: [SPECIFICA.md](SPECIFICA.md). Stato: **prototipo dello scann
   - `bordi.js` trova la carta nell'inquadratura e la raddrizza (OpenCV).
   - `data/` catalogo: elenco carte e impronte (nessuna immagine).
 - `catalogo/` script del PC che costruiscono `web/data/` e lo misurano.
+- `android/` app Android (Capacitor) con la pagina di `web/` dentro: `ScannerPlugin.java` fa in nativo
+  fotocamera, bordi (OpenCV), impronte (ONNX Runtime) e lettura (ML Kit). GitHub la costruisce a ogni modifica
+  (`.github/workflows/apk.yml`) e la pubblica in
+  [releases/apk](https://github.com/SerraMarco1/scanner-carte/releases/tag/apk). Per firmarla sempre con la
+  stessa chiave servono i segreti `ANDROID_KEYSTORE_B64` e `ANDROID_KEYSTORE_PASSWORD`.
 
 ## Ricostruire il catalogo
 Serve Node.js. La prima volta:
