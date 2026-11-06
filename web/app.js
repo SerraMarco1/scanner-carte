@@ -1,17 +1,18 @@
 // Prototipo dello scanner: misura quanto spesso il riconoscimento indovina sulle carte vere.
-// La carta va allineata alla cornice gialla (il ritaglio automatico arriverà dopo).
+// La carta viene trovata e raddrizzata da sola; la scansione parte quando resta ferma.
 import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/ort.webgpu.min.mjs';
 import { CARD_W, CARD_H, SIZE, DIM, artRect, toTensorData, normalize, scoreAll, topK, artSim, SAME_ART } from './core.js';
+import { loadCV, findCard, warpCard } from './bordi.js';
 
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
 const MODEL_URL = 'https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/';
 // fp16: impronte uguali a quelle del catalogo (somiglianza 0,9999); la versione int8 se ne allontana (0,985).
 const MODEL_FILE = 'model_fp16.onnx';
-const STORE = 'scanner-proto-risultati';
+const STORE = 'scanner-proto-risultati', CAM = 'scanner-proto-obiettivo';
 const $ = id => document.getElementById(id);
 
 let session, backend, cards, byId, idx, artCat, fullCat, track;
-let lang = 'it', sleeve = false, pending = null, torchOn = false;
+let sleeve = false, pending = null, torchOn = false, cams = [];
 let results = [];
 try { results = JSON.parse(localStorage.getItem(STORE)) || []; } catch { /* memoria non disponibile */ }
 const save = () => { try { localStorage.setItem(STORE, JSON.stringify(results)); } catch { /* resta in memoria */ } };
@@ -51,7 +52,7 @@ async function getBytes(url, label, keep) {
 async function startModel() {
   const gpu = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null;
   const bytes = await getBytes(MODEL_URL + MODEL_FILE, 'modello', true);
-  loading('Avvio il riconoscimento…');
+  loading('Avvio il riconoscimento (la prima volta circa un minuto)…');
   for (const ep of gpu ? ['webgpu', 'wasm'] : ['wasm']) {
     try { session = await ort.InferenceSession.create(bytes, { executionProviders: [ep] }); backend = ep; return; }
     catch (e) { console.warn(ep, e); }
@@ -59,16 +60,24 @@ async function startModel() {
   throw new Error('Il modello non parte su questo telefono.');
 }
 
-async function startCamera() {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-  });
-  const video = $('cam');
-  video.srcObject = stream;
-  await video.play();
+// Fotocamera posteriore; deviceId = un obiettivo preciso (scelto con «Obiettivo»).
+async function startCamera(deviceId) {
+  track?.stop();
+  const video = { width: { ideal: 1920 }, height: { ideal: 1080 },
+    ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: 'environment' } }) };
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video });
+  $('cam').srcObject = stream;
+  await $('cam').play();
   track = stream.getVideoTracks()[0];
-  if (track.getCapabilities?.().torch) $('torch').hidden = false;
+  const caps = track.getCapabilities?.() || {};
+  if (caps.focusMode?.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+  $('torch').hidden = !caps.torch;
+  if (!cams.length) cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput' && !/front|user|anterior/i.test(d.label));
+  $('switchCam').hidden = cams.length < 2;
+  try { localStorage.setItem(CAM, track.getSettings().deviceId); } catch { /* si riparte dall'obiettivo predefinito */ }
 }
+
+const camInfo = () => { const s = track?.getSettings?.() || {}; return track ? `${s.width}×${s.height} «${track.label}»` : 'nessuna'; };
 
 async function init() {
   try {
@@ -78,13 +87,17 @@ async function init() {
     idx = new Map(cards.map((c, i) => [c[0], i]));
     artCat = new Int8Array((await getBytes('data/art.bin', 'impronte illustrazioni')).buffer);
     fullCat = new Int8Array((await getBytes('data/full.bin', 'impronte carte')).buffer);
+    loading('Scarico il rilevatore dei bordi (circa 10 MB)…');
+    await loadCV();
     await startModel();
     loading('Accendo la fotocamera…');
-    try { await startCamera(); }
-    catch { alertLine('Fotocamera non disponibile: puoi comunque usare «Da foto».'); }
+    let saved = null;
+    try { saved = localStorage.getItem(CAM); } catch { /* nessun obiettivo salvato */ }
+    try { await startCamera(saved); }
+    catch { try { await startCamera(); } catch { alertLine('Fotocamera non disponibile: puoi comunque usare «Da foto».'); } }
     $('loading').remove();
-    $('shoot').disabled = false;
     renderStats();
+    tick();
   } catch (e) {
     loading(`Qualcosa non va: ${e.message}. Ricarica la pagina per riprovare.`);
   }
@@ -92,22 +105,62 @@ async function init() {
 
 function alertLine(text) { $('stats').textContent = text; setTimeout(renderStats, 4000); }
 
-// ---------- riconoscimento ----------
+// ---------- scansione automatica ----------
+// Stati: 'cerca' (nessuna carta ferma), 'risultato' (scheda aperta),
+// 'via' (aspetto che la carta esca, così una carta tenuta ferma non conta due volte).
+let state = 'cerca', lastQuad = null, still = 0, gone = 0;
+const STILL = 3, GONE = 4, MOVE = 0.015; // fotogrammi fermi, fotogrammi senza carta, spostamento tollerato
+const HINT = { cerca: 'Inquadra una carta su un fondo scuro', ferma: 'Tieni ferma…', leggo: 'Riconosco…', via: 'Fatto: togli la carta e mettine un\'altra' };
+
 const card = Object.assign(document.createElement('canvas'), { width: CARD_W, height: CARD_H });
 const cardCtx = card.getContext('2d', { willReadFrequently: true });
 const sq = Object.assign(document.createElement('canvas'), { width: SIZE, height: SIZE });
 const sqCtx = sq.getContext('2d', { willReadFrequently: true });
 cardCtx.imageSmoothingQuality = sqCtx.imageSmoothingQuality = 'high';
 
-// Copia la parte di video sotto la cornice gialla (il video è «cover»: va riproporzionato).
-function grabFromVideo() {
-  const video = $('cam'), vw = video.videoWidth, vh = video.videoHeight;
-  const vr = video.getBoundingClientRect(), g = $('guide').getBoundingClientRect();
-  const s = Math.max(vr.width / vw, vr.height / vh);
-  const ox = vr.left + (vr.width - vw * s) / 2, oy = vr.top + (vr.height - vh * s) / 2;
-  cardCtx.drawImage(video, (g.left - ox) / s, (g.top - oy) / s, g.width / s, g.height / s, 0, 0, CARD_W, CARD_H);
+const moved = (a, b, size) => a.some(([x, y], i) => Math.hypot(x - b[i][0], y - b[i][1]) > MOVE * size);
+
+async function tick() {
+  const video = $('cam'), w = video.videoWidth, h = video.videoHeight;
+  if (state !== 'risultato' && w) {
+    let q = null;
+    try { q = findCard(video, w, h); } catch (e) { console.warn(e); }
+    if (state === 'via') {
+      gone = q ? 0 : gone + 1;
+      if (gone >= GONE) state = 'cerca';
+    } else {
+      still = q && lastQuad && !moved(q, lastQuad, Math.max(w, h)) ? still + 1 : 0;
+      if (still >= STILL) {
+        state = 'risultato';
+        $('hint').textContent = HINT.leggo;
+        warpCard(video, w, h, q, card);
+        await recognize();
+      }
+    }
+    lastQuad = q;
+    drawQuad(q, w, h);
+    if (state !== 'risultato') $('hint').textContent = state === 'via' ? HINT.via : q ? HINT.ferma : HINT.cerca;
+  }
+  setTimeout(tick, 100);
 }
 
+// Disegna il contorno trovato sopra il video (che è «cover»: va riproporzionato).
+function drawQuad(q, w, h) {
+  const o = $('overlay'), r = o.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+  if (o.width !== Math.round(r.width * dpr)) { o.width = Math.round(r.width * dpr); o.height = Math.round(r.height * dpr); }
+  const ctx = o.getContext('2d');
+  ctx.clearRect(0, 0, o.width, o.height);
+  if (!q) return;
+  const s = Math.max(o.width / w, o.height / h), ox = (o.width - w * s) / 2, oy = (o.height - h * s) / 2;
+  ctx.lineWidth = 4 * dpr;
+  ctx.strokeStyle = state === 'via' ? '#9aa1ae' : still > 0 ? '#3ccf7d' : '#ffd23f';
+  ctx.beginPath();
+  q.forEach(([x, y], i) => ctx[i ? 'lineTo' : 'moveTo'](ox + x * s, oy + y * s));
+  ctx.closePath();
+  ctx.stroke();
+}
+
+// ---------- riconoscimento ----------
 function pixels(r) {
   sqCtx.drawImage(card, r.left, r.top, r.width, r.height, 0, 0, SIZE, SIZE);
   return sqCtx.getImageData(0, 0, SIZE, SIZE).data;
@@ -119,7 +172,6 @@ async function embed(px) {
 }
 
 async function recognize() {
-  $('shoot').disabled = true;
   try {
     const t0 = performance.now();
     const va = await embed(pixels(artRect()));
@@ -128,13 +180,12 @@ async function recognize() {
     const ms = Math.round(performance.now() - t0);
     const ids = t => t.map(([, i]) => cards[i][0]);
     const tc = topK(sc, 5);
-    pending = { t: Date.now(), l: lang, b: sleeve ? 1 : 0, ms, c: ids(tc), s: tc.map(([s]) => +(s / 2).toFixed(3)), a: ids(topK(sa, 5)), f: ids(topK(sf, 5)) };
+    pending = { t: Date.now(), b: sleeve ? 1 : 0, ms, c: ids(tc), s: tc.map(([s]) => +(s / 2).toFixed(3)), a: ids(topK(sa, 5)), f: ids(topK(sf, 5)) };
     $('seen').getContext('2d').drawImage(card, 0, 0);
     showCandidates();
   } catch (e) {
     alertLine(`Errore nel riconoscimento: ${e.message}`);
-  } finally {
-    $('shoot').disabled = false;
+    state = 'cerca';
   }
 }
 
@@ -157,9 +208,13 @@ function showCandidates() {
   $('result').classList.add('show');
 }
 
+// pick: id scelto, null = nessuna, undefined = rifai (non conta e riprova subito sulla stessa carta).
 function decide(pick) {
   if (pick !== undefined) { results.push({ ...pending, p: pick }); save(); }
   pending = null;
+  state = pick === undefined ? 'cerca' : 'via';
+  still = gone = 0;
+  $('hint').textContent = HINT[state];
   $('result').classList.remove('show');
   renderStats();
 }
@@ -175,7 +230,6 @@ function summary(list) {
   };
 }
 const pct = (a, n) => n ? `${Math.round(100 * a / n)}%` : '—';
-const LANGS = { it: 'Italiane', en: 'Inglesi', ja: 'Giapponesi', altro: 'Altre' };
 
 function renderStats() {
   const s = summary(results);
@@ -183,9 +237,9 @@ function renderStats() {
 }
 
 function tableRows() {
-  const rows = [['Tutte', results], ...Object.entries(LANGS).map(([k, v]) => [v, results.filter(r => r.l === k)]),
-    ['In bustina', results.filter(r => r.b)]].filter(([, l]) => l.length);
-  return rows.map(([name, l]) => { const s = summary(l); return [name, s.n, pct(s.top1, s.n), pct(s.top5, s.n), pct(s.art1, s.n), pct(s.full1, s.n), s.ms]; });
+  return [['Tutte', results], ['In bustina', results.filter(r => r.b)], ['Senza bustina', results.filter(r => !r.b)]]
+    .filter(([, l]) => l.length)
+    .map(([name, l]) => { const s = summary(l); return [name, s.n, pct(s.top1, s.n), pct(s.top5, s.n), pct(s.art1, s.n), pct(s.full1, s.n), s.ms]; });
 }
 
 function openMenu() {
@@ -194,13 +248,13 @@ function openMenu() {
   t.innerHTML = `<tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>`;
   for (const r of tableRows()) { const tr = t.insertRow(); r.forEach(v => { tr.insertCell().textContent = v; }); }
   $('table').replaceChildren(results.length ? t : Object.assign(document.createElement('p'), { textContent: 'Ancora nessuna scansione.' }));
-  $('tech').textContent = `Catalogo: ${cards.length} carte · motore: ${backend} (${MODEL_FILE})`;
+  $('tech').textContent = `Catalogo: ${cards.length} carte · motore: ${backend} · fotocamera: ${camInfo()}`;
   $('copyText').style.display = 'none';
   $('menu').classList.add('show');
 }
 
 async function copyResults() {
-  const lines = ['SCANNER CARTE — risultati prototipo', `motore ${backend} ${MODEL_FILE} · catalogo ${cards.length} · ${navigator.userAgent}`,
+  const lines = ['SCANNER CARTE — risultati prototipo', `motore ${backend} ${MODEL_FILE} · catalogo ${cards.length} · fotocamera ${camInfo()} · ${navigator.userAgent}`,
     'gruppo | n | 1° posto | prime 5 | solo disegno | carta intera | ms', ...tableRows().map(r => r.join(' | ')),
     'DATI', ...results.map(r => JSON.stringify(r))];
   const text = lines.join('\n');
@@ -209,7 +263,6 @@ async function copyResults() {
 }
 
 // ---------- comandi ----------
-$('shoot').addEventListener('click', () => { if (!$('cam').videoWidth) return alertLine('Fotocamera non pronta.'); grabFromVideo(); recognize(); });
 $('none').addEventListener('click', () => decide(null));
 $('redo').addEventListener('click', () => decide(undefined));
 $('openMenu').addEventListener('click', openMenu);
@@ -219,24 +272,30 @@ $('reset').addEventListener('click', () => {
   if ($('reset').dataset.sure) { results = []; save(); renderStats(); openMenu(); delete $('reset').dataset.sure; $('reset').textContent = 'Azzera i risultati'; }
   else { $('reset').dataset.sure = '1'; $('reset').textContent = 'Tocca di nuovo per cancellare tutto'; }
 });
-$('langs').addEventListener('click', e => {
-  const b = e.target.closest('[data-lang]'); if (!b) return;
-  lang = b.dataset.lang;
-  for (const c of $('langs').children) c.setAttribute('aria-pressed', c === b);
-});
 $('sleeve').addEventListener('click', e => { sleeve = !sleeve; e.currentTarget.setAttribute('aria-pressed', sleeve); });
 $('torch').addEventListener('click', async () => {
   torchOn = !torchOn;
   try { await track.applyConstraints({ advanced: [{ torch: torchOn }] }); } catch { torchOn = false; }
   $('torch').setAttribute('aria-pressed', torchOn);
 });
-// Da foto: la foto deve contenere solo la carta (ritagliala prima con la galleria).
+$('switchCam').addEventListener('click', async () => {
+  const now = cams.findIndex(d => d.deviceId === track?.getSettings().deviceId), next = (now + 1) % cams.length;
+  try { await startCamera(cams[next].deviceId); alertLine(`Obiettivo ${next + 1} di ${cams.length}`); }
+  catch { alertLine('Questo obiettivo non si apre: provane un altro.'); }
+});
+// Da foto: anche una foto fatta con la fotocamera del telefono; la carta viene cercata e raddrizzata.
 $('file').addEventListener('change', async e => {
-  const f = e.target.files[0]; if (!f) return;
-  const bmp = await createImageBitmap(f);
-  cardCtx.drawImage(bmp, 0, 0, CARD_W, CARD_H);
+  const f = e.target.files[0];
   e.target.value = '';
-  recognize();
+  if (!f) return;
+  const bmp = await createImageBitmap(f), k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const pic = Object.assign(document.createElement('canvas'), { width: Math.round(bmp.width * k), height: Math.round(bmp.height * k) });
+  pic.getContext('2d').drawImage(bmp, 0, 0, pic.width, pic.height);
+  const q = findCard(pic, pic.width, pic.height);
+  if (q) warpCard(pic, pic.width, pic.height, q, card);
+  else cardCtx.drawImage(pic, 0, 0, CARD_W, CARD_H); // nessun bordo trovato: la foto è già la carta
+  state = 'risultato';
+  await recognize();
 });
 
 init();

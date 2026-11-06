@@ -6,6 +6,7 @@ Specifica completa: [SPECIFICA.md](SPECIFICA.md). Stato: **prototipo dello scann
 ## Struttura
 - `web/` la pagina che gira sul telefono (pubblicata da GitHub Pages a ogni modifica).
   - `core.js` ritagli e confronto delle impronte, condiviso con gli script del PC.
+  - `bordi.js` trova la carta nell'inquadratura e la raddrizza (OpenCV).
   - `data/` catalogo: elenco carte e impronte (nessuna immagine).
 - `catalogo/` script del PC che costruiscono `web/data/` e lo misurano.
 
