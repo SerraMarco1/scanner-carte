@@ -215,7 +215,7 @@ function showCandidates() {
     const [, name, set, num, l, img] = byId.get(id);
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'cand';
-    const im = Object.assign(document.createElement('img'), { src: img, alt: '', loading: 'lazy', referrerPolicy: 'no-referrer' });
+    const im = Object.assign(document.createElement('img'), { src: img, alt: '', referrerPolicy: 'no-referrer' });
     const txt = document.createElement('div');
     txt.innerHTML = `<div class="n"></div><div class="s"><span class="lang">${l === 'ja' ? 'JP' : 'EN'}</span></div>`;
     txt.querySelector('.n').textContent = `${k + 1}. ${name}`;
@@ -268,13 +268,13 @@ function openMenu() {
   t.innerHTML = `<tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>`;
   for (const r of tableRows()) { const tr = t.insertRow(); r.forEach(v => { tr.insertCell().textContent = v; }); }
   $('table').replaceChildren(results.length ? t : Object.assign(document.createElement('p'), { textContent: 'Ancora nessuna scansione.' }));
-  $('tech').textContent = `Catalogo: ${cards.length} carte · motore: ${backend} (verifica ${checks.join(", ")}) · fotocamera: ${camInfo()}`;
+  $('tech').textContent = `Catalogo: ${cards.length} carte · motore: ${backend} (verifica ${checks.join(", ")}, isolata ${self.crossOriginIsolated}) · fotocamera: ${camInfo()}`;
   $('copyText').style.display = 'none';
   $('menu').classList.add('show');
 }
 
 async function copyResults() {
-  const lines = ['SCANNER CARTE — risultati prototipo', `motore ${backend} · verifica ${checks.join(" ")} · catalogo ${cards.length} · fotocamera ${camInfo()} · ${navigator.userAgent}`,
+  const lines = ['SCANNER CARTE — risultati prototipo', `motore ${backend} · verifica ${checks.join(" ")} · isolata ${self.crossOriginIsolated} · catalogo ${cards.length} · fotocamera ${camInfo()} · ${navigator.userAgent}`,
     'gruppo | n | 1° posto | prime 5 | solo disegno | carta intera | ms', ...tableRows().map(r => r.join(' | ')),
     'DATI', ...results.map(r => JSON.stringify(r))];
   const text = lines.join('\n');
