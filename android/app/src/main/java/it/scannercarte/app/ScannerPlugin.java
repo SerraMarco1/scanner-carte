@@ -16,6 +16,9 @@ import android.webkit.WebView;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraInfo;
 import androidx.camera.core.CameraSelector;
+import androidx.camera.core.FocusMeteringAction;
+import androidx.camera.core.FocusMeteringResult;
+import androidx.camera.core.MeteringPoint;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
@@ -113,6 +116,9 @@ public class ScannerPlugin extends Plugin {
     private int still = 0, frameW = 0, frameH = 0;
     private long lastProcessed = 0, lastEvent = 0;
     private volatile String mode = "cerca";
+    private volatile boolean needFocus = true;
+    private volatile long focusStart = 0;      // > 0 mentre la fotocamera mette a fuoco sulla carta
+    private static final long FOCUS_MS = 1500; // attesa massima della messa a fuoco
     private byte[] rowBuf;
 
     private OrtEnvironment env;
@@ -304,7 +310,12 @@ public class ScannerPlugin extends Plugin {
                 notifyListeners("error", o);
             }
             int w = rgba.cols(), h = rgba.rows();
-            still = q != null && prevQuad != null && !moved(q, prevQuad, Math.max(w, h)) ? still + 1 : 0;
+            boolean movedNow = q != null && prevQuad != null && moved(q, prevQuad, Math.max(w, h));
+            boolean focusing = focusStart > 0 && now - focusStart < FOCUS_MS;
+            // Carta appena entrata, spostata o da rifare: prima la messa a fuoco su di lei, poi conta come ferma.
+            // (Prova del 7/11: le scansioni sbagliate erano foto sfocate.)
+            if (q != null && !focusing && (needFocus || prevQuad == null || movedNow)) { needFocus = false; focusOn(q, w, h); focusing = true; }
+            still = q != null && prevQuad != null && !movedNow && !focusing ? still + 1 : 0;
             prevQuad = q;
             synchronized (lock) {
                 if (lastFrame != null) lastFrame.release();
@@ -398,6 +409,24 @@ public class ScannerPlugin extends Plugin {
         } finally {
             small.release(); gray.release(); edges.release(); hier.release(); kernel.release();
         }
+    }
+
+    // Messa a fuoco ed esposizione sul centro della carta (q in pixel del fotogramma fw×fh, mappati come in QuadView).
+    private void focusOn(Point[] q, int fw, int fh) {
+        focusStart = SystemClock.uptimeMillis();
+        double cx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4, cy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4;
+        previewView.post(() -> {
+            try {
+                if (camera == null) { focusStart = 0; return; }
+                float vw = previewView.getWidth(), vh = previewView.getHeight(), s = Math.max(vw / fw, vh / fh);
+                MeteringPoint p = previewView.getMeteringPointFactory().createPoint((vw - fw * s) / 2 + (float) cx * s, (vh - fh * s) / 2 + (float) cy * s);
+                ListenableFuture<FocusMeteringResult> f = camera.getCameraControl().startFocusAndMetering(
+                    new FocusMeteringAction.Builder(p, FocusMeteringAction.FLAG_AF | FocusMeteringAction.FLAG_AE).setAutoCancelDuration(3, TimeUnit.SECONDS).build());
+                f.addListener(() -> focusStart = 0, ContextCompat.getMainExecutor(getContext()));
+            } catch (Exception e) {
+                focusStart = 0;
+            }
+        });
     }
 
     // Come findByModel di web/bordi.js: il modello vede il centro 3:4 verticale del fotogramma.
@@ -653,6 +682,7 @@ public class ScannerPlugin extends Plugin {
     @PluginMethod
     public void setMode(PluginCall call) {
         mode = call.getString("mode", "cerca");
+        if ("cerca".equals(mode)) needFocus = true; // carta nuova o scansione da rifare: rimettere a fuoco
         call.resolve();
     }
 

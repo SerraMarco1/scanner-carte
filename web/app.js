@@ -3,7 +3,7 @@
 // La carta viene trovata e raddrizzata da sola; la scansione parte quando resta ferma.
 // Disegno (impronte) + testo letto (lingua e numero) → stampa scelta.
 // Nell'APK Android fotocamera, bordi, impronte e lettura sono nativi (ScannerPlugin.java); qui resta il resto.
-import { CARD_W, CARD_H, SIZE, DIM, artRect, toTensorData, normalize, scoreAll, topK, artSim, probeInput, candidatePrints, choosePrint } from './core.js';
+import { CARD_W, CARD_H, SIZE, DIM, artRect, toTensorData, normalize, scoreAll, topK, artSim, probeInput, candidatePrints, choosePrint, artGap, CLEAR } from './core.js';
 import { loadCV, loadEdges, findCard, warpCard } from './bordi.js';
 import { readCard, latinLanguage, asianLanguage, cardNumber } from './testo.js';
 import { OWNED_ART, isBasicEnergy, semaphore, pickVariant, variantLabel, load as loadCollection, save as saveCollection, newKey, toCSV } from './collezione.js';
@@ -29,7 +29,7 @@ const DATA = window.Capacitor?.isNativePlatform?.() ? 'https://serramarco1.githu
 
 let session, backend, ocr, cards, byId, idx, artCat, fullCat, track, shotInfo = '', nativeInfo = null, crash = '';
 let pending = null, torchOn = false, cams = [], checks = [], pickLang = 'it', lastLang = 'it';
-let data = loadCollection(), mode = 'controllo', col = data.cols[0], sticky = {};
+let data = loadCollection(), mode = 'inventario', col = data.cols[0], sticky = {}, retries = 0;
 try {
   lastLang = localStorage.getItem(LAST_LANG) || 'it';
   mode = localStorage.getItem(MODE) || mode;
@@ -262,8 +262,10 @@ async function tick() {
 }
 
 // APK: il modulo nativo manda ~10 volte al secondo se vede una carta e da quanti fotogrammi è ferma.
+let refocus = false; // dopo «ci riprovo» si aspetta che il modulo nativo rimetta a fuoco (ferma torna a 0)
 function onNativeFrame({ found, still: s }) {
   if (state === 'risultato' || paused()) return;
+  if (refocus) { if (s) return; refocus = false; }
   if (state === 'via') {
     gone = found ? 0 : gone + 1;
     if (gone >= GONE) setState('cerca');
@@ -350,13 +352,23 @@ async function recognize() {
     const print = choosePrint(candidatePrints(sc, artCat), cards, read);
     if (guessed) print.sure = false;
     const ids = t => t.map(([, i]) => cards[i][0]);
-    const tc = topK(sc, 5);
+    const tc = topK(sc, 5), gap = artGap(sc, artCat), top = tc[0][0] / 2;
     pending = {
       t: Date.now(), m: mode, src: shotInfo, ms: Math.round(performance.now() - t0), msOcr: Math.round(msOcr),
       c: ids(tc), s: tc.map(([s]) => +(s / 2).toFixed(3)), a: ids(topK(sa, 5)), f: ids(topK(sf, 5)), px: lumaStats(),
       pi: cards[print.i][0], pl: print.lang, sure: print.sure ? 1 : 0, rl: guessed ? null : read.lang, rn: read.number?.num ?? null, rt: read.number?.total ?? null,
-      ranked: [...new Set(print.ranked.map(r => cards[r.i][0]))].slice(0, 5),
+      ranked: [...new Set(print.ranked.map(r => cards[r.i][0]))].slice(0, 5), g: +gap.toFixed(3),
     };
+    // Foto poco chiara (sfocata, riflesso, carta non in catalogo): si rifà da sola, con nuova messa a fuoco, fino a 2 volte.
+    if ((top < CLEAR.score || (gap < CLEAR.gap && !print.sure)) && retries < 2) {
+      retries++;
+      results.push({ ...pending, p: null, l: null, auto: 0, rifai: 1 }); save();
+      pending = null; still = gone = 0; refocus = NATIVE;
+      alertLine('Non la vedo bene: tienila ferma, ci riprovo…');
+      return setState('cerca');
+    }
+    retries = 0;
+    if (top < CLEAR.score) print.sure = false;
     $('seen').getContext('2d').drawImage(card, 0, 0);
     if (isBasicEnergy(cards[print.i][1])) {
       record(null, true);
@@ -365,7 +377,7 @@ async function recognize() {
     }
     // Il colore è certo anche senza la stampa esatta se nessuna delle stampe possibili ha un disegno che hai già.
     const near = print.ranked.filter(r => print.ranked[0].s - r.s < 1.5);
-    const greenSure = mode === 'controllo' && near.every(r => !ownsArt(r.i));
+    const greenSure = mode === 'controllo' && gap >= CLEAR.gap && near.every(r => !ownsArt(r.i));
     const scan = { pending: { ...pending }, best: { id: pending.pi, lang: print.lang } };
     if (print.sure || greenSure) act(scan.best, true, scan);
     else askPrint(scan);
@@ -375,13 +387,17 @@ async function recognize() {
   }
 }
 
-// Luminosità media e contrasto della carta vista (0-255): un'immagine nera o piatta si riconosce subito.
+// Luminosità media, contrasto e nitidezza (varianza del laplaciano) della carta vista: per capire le foto venute male.
 function lumaStats() {
-  const d = cardCtx.getImageData(0, 0, CARD_W, CARD_H).data, n = d.length / 4;
-  let s = 0, s2 = 0;
-  for (let i = 0; i < d.length; i += 4) { const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; s += y; s2 += y * y; }
+  const d = cardCtx.getImageData(0, 0, CARD_W, CARD_H).data, n = d.length / 4, y = new Float32Array(n);
+  let s = 0, s2 = 0, l = 0, l2 = 0, k = 0;
+  for (let i = 0; i < n; i++) { y[i] = 0.299 * d[4 * i] + 0.587 * d[4 * i + 1] + 0.114 * d[4 * i + 2]; s += y[i]; s2 += y[i] * y[i]; }
+  for (let r = 1; r < CARD_H - 1; r++) for (let c = 1; c < CARD_W - 1; c++) {
+    const i = r * CARD_W + c, v = 4 * y[i] - y[i - 1] - y[i + 1] - y[i - CARD_W] - y[i + CARD_W];
+    l += v; l2 += v * v; k++;
+  }
   const m = s / n;
-  return [Math.round(m), Math.round(Math.sqrt(Math.max(0, s2 / n - m * m)))];
+  return [Math.round(m), Math.round(Math.sqrt(Math.max(0, s2 / n - m * m))), Math.round(l2 / k - (l / k) ** 2)];
 }
 
 // ---------- decisione: semaforo e registrazione ----------
@@ -425,7 +441,7 @@ function act(pick, auto, scan, doubt = false) {
   if (mode === 'scarto') return add({ s: 1 }, 'viola', 'Negli scarti', []);
   if (mode === 'sistema') return system(p, name, info, fix);
   if (mode === 'controllo') {
-    verdict(s.color, TITLE[s.color], name, [info, ...have(s.color === 'rosso' ? s.exact : s.same), note], fix(), 'Sbagliata?');
+    verdict(s.color, TITLE[s.color], name, [info, ...have(s.color === 'rosso' ? s.exact : s.same), note, 'Controllo: non salvata'], fix(), 'Sbagliata?');
     return setState('via');
   }
   if (s.color === 'verde') return add({}, 'verde', 'Nuova', [`Aggiunta a «${col}»`]);
@@ -638,13 +654,13 @@ async function copyOut(text, button, done) {
 // ---------- prove dello scanner ----------
 // Stesso disegno: stessa carta, ristampa con lo stesso nome, o gemella in un'altra lingua.
 const sameArt = (a, b) => a === b || (!!a && !!b && byId.has(a) && byId.has(b) && (byId.get(a)[1] === byId.get(b)[1] || artSim(artCat, idx.get(a), idx.get(b)) >= 0.85));
-function summary(list) {
-  const prints = list.filter(r => r.pi), auto = prints.filter(r => r.auto), asked = prints.filter(r => !r.auto);
+function summary(all) {
+  const list = all.filter(r => !r.rifai), prints = list.filter(r => r.pi), auto = prints.filter(r => r.auto), asked = prints.filter(r => !r.auto);
   const n = list.length, hit = (k, m) => list.filter(r => r.p && r[m].slice(0, k).some(id => sameArt(id, r.p))).length;
   return {
     n, auto: auto.length, autoWrong: auto.filter(r => r.undo).length, asked: asked.length,
     askedRight: asked.filter(r => r.p === r.pi && r.l === r.pl).length, top1: hit(1, 'c'), top5: hit(5, 'c'),
-    ms: n ? Math.round(list.reduce((s, r) => s + r.ms, 0) / n) : 0,
+    ms: n ? Math.round(list.reduce((s, r) => s + r.ms, 0) / n) : 0, redo: all.length - n,
   };
 }
 const pct = (a, n) => n ? `${Math.round(100 * a / n)}%` : '—';
@@ -657,12 +673,12 @@ function renderStats() {
 function tableRows() {
   return [['Tutte', results], ...Object.entries(MODES).map(([m, name]) => [name, results.filter(r => r.m === m)])]
     .filter(([, l]) => l.length)
-    .map(([name, l]) => { const s = summary(l); return [name, s.n, pct(s.auto, s.n), pct(s.autoWrong, s.auto), pct(s.askedRight, s.asked), pct(s.top1, s.n), pct(s.top5, s.n), s.ms]; });
+    .map(([name, l]) => { const s = summary(l); return [name, s.n, pct(s.auto, s.n), pct(s.autoWrong, s.auto), pct(s.askedRight, s.asked), pct(s.top1, s.n), pct(s.top5, s.n), s.ms, s.redo]; });
 }
 
 function openMenu() {
   renderCollection();
-  const head = ['', 'n.', 'da sola', 'annullate tra le da sole', 'proposta giusta quando chiede', 'disegno 1°', 'prime 5', 'ms'];
+  const head = ['', 'n.', 'da sola', 'annullate tra le da sole', 'proposta giusta quando chiede', 'disegno 1°', 'prime 5', 'ms', 'rifatte (foto poco chiara)'];
   const t = document.createElement('table');
   t.innerHTML = `<tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>`;
   for (const r of tableRows()) { const tr = t.insertRow(); r.forEach(v => { tr.insertCell().textContent = v; }); }
@@ -674,7 +690,7 @@ function openMenu() {
 
 function copyResults() {
   const lines = ['SCANNER CARTE — risultati', `motore ${backend} · verifica ${checks.join(' ')} · isolata ${self.crossOriginIsolated} · catalogo ${cards.length} · fotocamera ${camInfo()} · ${navigator.userAgent}`,
-    'gruppo | n | da sola | annullate tra le da sole | proposta giusta quando chiede | disegno 1° | prime 5 | ms', ...tableRows().map(r => r.join(' | ')),
+    'gruppo | n | da sola | annullate tra le da sole | proposta giusta quando chiede | disegno 1° | prime 5 | ms | rifatte', ...tableRows().map(r => r.join(' | ')),
     ...(crash ? ['ERRORE', crash.slice(0, 3000)] : []), 'DATI', ...results.map(r => JSON.stringify(r))];
   copyOut(lines.join('\n'), $('copy'), 'Copiati: incollali in chat');
 }

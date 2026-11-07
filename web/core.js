@@ -83,6 +83,15 @@ export function distance(a, b) {
 }
 export const normNum = s => String(s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^0+(?=\d)/, '');
 
+// Foto chiara: punteggio del primo posto e distacco dal primo disegno diverso, come i punteggi registrati (media dei due).
+// Prova vera del 7/11 (A52s): carte giuste da 0,65 in su con distacco ≥ 0,03; foto sfocate e carte sbagliate sotto
+// (punteggi 0,43-0,64, distacchi 0,001-0,023).
+export const CLEAR = { score: 0.6, gap: 0.03 };
+export function artGap(sc, artCat, same = 0.85) {
+  const top = topK(sc, 30), other = top.find(([, i]) => artSim(artCat, top[0][1], i) < same) || top.at(-1);
+  return (top[0][0] - other[0]) / 2;
+}
+
 // Stampe candidate: le carte col disegno vicino al primo posto, più tutte quelle con lo stesso disegno
 // (ristampe e gemelle giapponesi). sc = punteggi combinati (illustrazione + carta intera).
 export function candidatePrints(sc, artCat, k = 10, gap = 0.12, same = 0.85) {
