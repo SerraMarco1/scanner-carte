@@ -39,6 +39,7 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.mlkit.vision.common.InputImage;
@@ -71,6 +72,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -113,6 +115,9 @@ public class ScannerPlugin extends Plugin {
     private final Object lock = new Object();
     private Mat lastFrame;          // ultimo fotogramma, RGBA e già girato in verticale
     private Point[] lastQuad, prevQuad;
+    // Ultimi fotogrammi della carta ridotti a celle 16×22: servono a vedere la lamina olografica (foilStats).
+    private final ArrayDeque<float[]> foil = new ArrayDeque<>();
+    private static final int GW = 16, GH = 22;
     private int still = 0, frameW = 0, frameH = 0;
     private long lastProcessed = 0, lastEvent = 0;
     private volatile String mode = "cerca";
@@ -296,7 +301,7 @@ public class ScannerPlugin extends Plugin {
     private void onFrame(ImageProxy image) {
         try {
             long now = SystemClock.uptimeMillis();
-            if (now - lastProcessed < FRAME_MS || session == null) return;
+            if (now - lastProcessed < FRAME_MS || session == null || "risultato".equals(mode)) return;
             lastProcessed = now;
             Mat rgba = upright(toMat(image), image.getImageInfo().getRotationDegrees());
             Point[] q;
@@ -315,16 +320,19 @@ public class ScannerPlugin extends Plugin {
             // Carta appena entrata, spostata o da rifare: prima la messa a fuoco su di lei, poi conta come ferma.
             // (Prova del 7/11: le scansioni sbagliate erano foto sfocate.)
             if (q != null && !focusing && (needFocus || prevQuad == null || movedNow)) { needFocus = false; focusOn(q, w, h); focusing = true; }
-            still = q != null && prevQuad != null && !movedNow && !focusing ? still + 1 : 0;
+            still = q != null && prevQuad != null && !movedNow ? still + 1 : 0;
             prevQuad = q;
+            float[] cells = q == null ? null : cellsOf(rgba, q);
             synchronized (lock) {
                 if (lastFrame != null) lastFrame.release();
                 lastFrame = rgba;
                 lastQuad = q;
                 frameW = w;
                 frameH = h;
+                if (cells == null) foil.clear();
+                else { foil.addLast(cells); if (foil.size() > 10) foil.removeFirst(); }
             }
-            final int s = still;
+            final int s = focusing ? 0 : still; // durante la messa a fuoco i fotogrammi fermi si contano ma non si usano
             final Point[] found = q;
             overlay.post(() -> overlay.show(found, w, h, s, mode));
             if (now - lastEvent >= 90) {
@@ -409,6 +417,60 @@ public class ScannerPlugin extends Plugin {
         } finally {
             small.release(); gray.release(); edges.release(); hier.release(); kernel.release();
         }
+    }
+
+    // Carta raddrizzata e ridotta a celle GW×GH (media di ~10×10 pixel): RGB per cella.
+    private static float[] cellsOf(Mat rgba, Point[] q) {
+        Mat w = new Mat(), c = new Mat();
+        MatOfPoint2f from = new MatOfPoint2f(q[0], q[1], q[2], q[3]);
+        MatOfPoint2f to = new MatOfPoint2f(new Point(0, 0), new Point(GW * 10, 0), new Point(GW * 10, GH * 10), new Point(0, GH * 10));
+        Mat m = Imgproc.getPerspectiveTransform(from, to);
+        try {
+            Imgproc.warpPerspective(rgba, w, m, new org.opencv.core.Size(GW * 10, GH * 10), Imgproc.INTER_LINEAR);
+            Imgproc.resize(w, c, new org.opencv.core.Size(GW, GH), 0, 0, Imgproc.INTER_AREA);
+            byte[] px = new byte[GW * GH * 4];
+            c.get(0, 0, px);
+            float[] f = new float[GW * GH * 3];
+            for (int i = 0; i < GW * GH; i++) for (int k = 0; k < 3; k++) f[i * 3 + k] = px[i * 4 + k] & 0xFF;
+            return f;
+        } finally {
+            w.release(); c.release(); m.release(); from.release(); to.release();
+        }
+    }
+
+    // Lamina (reverse / holo): coi minimi movimenti del telefono i riflessi della lamina cambiano, la stampa no.
+    // Per ogni cella la variazione del colore tra i fotogrammi (ognuno diviso per la sua luce media), in millesimi:
+    // [finestra del disegno, resto della carta, fotogrammi]. Il bordo esterno si salta (risente dei contorni).
+    // shortcut: solo misurata, non decide ancora la variante; da tarare con carte vere normali, reverse e holo.
+    private double[] foilStats() {
+        List<float[]> fr;
+        synchronized (lock) { fr = new ArrayList<>(foil); }
+        int n = fr.size();
+        if (n < 3) return null;
+        double[][] norm = new double[n][];
+        for (int t = 0; t < n; t++) {
+            float[] f = fr.get(t);
+            double[] mean = new double[3];
+            for (int i = 0; i < f.length; i++) mean[i % 3] += f[i];
+            norm[t] = new double[f.length];
+            for (int i = 0; i < f.length; i++) norm[t][i] = f[i] / Math.max(1, mean[i % 3] / (GW * GH));
+        }
+        double art = 0, body = 0;
+        int na = 0, nb = 0;
+        for (int y = 1; y < GH - 1; y++)
+            for (int x = 1; x < GW - 1; x++) {
+                boolean inArt = x >= 2 && x <= 13 && y >= 3 && y <= 10, outArt = y <= 1 || y >= 12; // celle tutte dentro o tutte fuori
+                if (!inArt && !outArt) continue;
+                double v = 0;
+                for (int k = 0; k < 3; k++) {
+                    int i = (y * GW + x) * 3 + k;
+                    double s = 0, s2 = 0;
+                    for (int t = 0; t < n; t++) { s += norm[t][i]; s2 += norm[t][i] * norm[t][i]; }
+                    v += Math.sqrt(Math.max(0, s2 / n - (s / n) * (s / n)));
+                }
+                if (inArt) { art += v; na++; } else { body += v; nb++; }
+            }
+        return new double[] { 1000 * art / na, 1000 * body / nb, n };
     }
 
     // Messa a fuoco ed esposizione sul centro della carta (q in pixel del fotogramma fw×fh, mappati come in QuadView).
@@ -567,6 +629,11 @@ public class ScannerPlugin extends Plugin {
             try {
                 long t0 = SystemClock.uptimeMillis();
                 warp(frame, q, hi);
+                // La lettura del testo (ML Kit, thread suoi) parte subito e lavora mentre si calcolano le impronte.
+                Bitmap card = Bitmap.createBitmap(OCR_W * OCR_SCALE, OCR_H * OCR_SCALE, Bitmap.Config.ARGB_8888);
+                Utils.matToBitmap(hi, card);
+                lastCard = card;
+                Task<Text> ocr = latinReader().process(InputImage.fromBitmap(card, 0));
                 Imgproc.resize(hi, small, new org.opencv.core.Size(CARD_W, CARD_H), 0, 0, Imgproc.INTER_AREA);
                 // Finestra dell'illustrazione: stessi arrotondamenti di artRect() in web/core.js.
                 org.opencv.core.Rect art = new org.opencv.core.Rect((int) Math.round(ART_X * CARD_W), (int) Math.round(ART_Y * CARD_H),
@@ -575,11 +642,10 @@ public class ScannerPlugin extends Plugin {
                 float[] va = embed(artMat), vf = embed(small);
                 artMat.release();
                 long t1 = SystemClock.uptimeMillis();
-                Bitmap card = Bitmap.createBitmap(OCR_W * OCR_SCALE, OCR_H * OCR_SCALE, Bitmap.Config.ARGB_8888);
-                Utils.matToBitmap(hi, card);
-                lastCard = card;
-                JSArray lines = read(latinReader(), card);
+                JSArray lines = lines(ocr);
                 JSObject o = new JSObject();
+                double[] f = foilStats();
+                if (f != null) { JSArray a = new JSArray(); for (double x : f) a.put(Double.valueOf(Math.round(x * 10) / 10.0)); o.put("foil", a); }
                 o.put("art", toJs(va));
                 o.put("full", toJs(vf));
                 o.put("lines", lines);
@@ -660,7 +726,11 @@ public class ScannerPlugin extends Plugin {
     }
 
     private static JSArray read(TextRecognizer reader, Bitmap card) throws Exception {
-        Text text = Tasks.await(reader.process(InputImage.fromBitmap(card, 0)), 10, TimeUnit.SECONDS);
+        return lines(reader.process(InputImage.fromBitmap(card, 0)));
+    }
+
+    private static JSArray lines(Task<Text> task) throws Exception {
+        Text text = Tasks.await(task, 10, TimeUnit.SECONDS);
         JSArray out = new JSArray();
         for (Text.TextBlock block : text.getTextBlocks())
             for (Text.Line line : block.getLines()) {

@@ -336,14 +336,14 @@ async function analyzeNative() {
     if (a) lang = { lang: a };
   }
   const read = { lang: lang?.lang || null, number: cardNumber(r.lines, OCR_H) };
-  return { va: Float32Array.from(r.art), vf: Float32Array.from(r.full), read, msOcr: r.msOcr + performance.now() - t1 };
+  return { va: Float32Array.from(r.art), vf: Float32Array.from(r.full), read, msOcr: r.msOcr + performance.now() - t1, msEmb: r.msEmbed, foil: r.foil };
 }
 
 async function recognize() {
   try {
     $('verdict').hidden = true;
     const t0 = performance.now();
-    const { va, vf, read, msOcr } = NATIVE ? await analyzeNative() : await analyzeWeb();
+    const { va, vf, read, msOcr, msEmb, foil } = NATIVE ? await analyzeNative() : await analyzeWeb();
     const sa = scoreAll(va, artCat), sf = scoreAll(vf, fullCat), sc = sa.map((s, i) => s + sf[i]);
     // Lingua non letta: si usa l'ultima confermata (una pila di carte è quasi sempre di una lingua), ma si chiede.
     const guessed = !read.lang;
@@ -354,7 +354,7 @@ async function recognize() {
     const ids = t => t.map(([, i]) => cards[i][0]);
     const tc = topK(sc, 5), gap = artGap(sc, artCat), top = tc[0][0] / 2;
     pending = {
-      t: Date.now(), m: mode, src: shotInfo, ms: Math.round(performance.now() - t0), msOcr: Math.round(msOcr),
+      t: Date.now(), m: mode, src: shotInfo, ms: Math.round(performance.now() - t0), msOcr: Math.round(msOcr), msEmb, foil,
       c: ids(tc), s: tc.map(([s]) => +(s / 2).toFixed(3)), a: ids(topK(sa, 5)), f: ids(topK(sf, 5)), px: lumaStats(),
       pi: cards[print.i][0], pl: print.lang, sure: print.sure ? 1 : 0, rl: guessed ? null : read.lang, rn: read.number?.num ?? null, rt: read.number?.total ?? null,
       ranked: [...new Set(print.ranked.map(r => cards[r.i][0]))].slice(0, 5), g: +gap.toFixed(3),
@@ -424,24 +424,28 @@ function askPrint(scan) {
   });
 }
 
-// Stampa decisa (pick = { id, lang }): semaforo e azione della modalità.
-function act(pick, auto, scan, doubt = false) {
-  const row = byId.get(pick.id), p = { id: pick.id, l: pick.lang, v: pickVariant(row[8], sticky) };
+// Stampa decisa (pick = { id, lang }): semaforo e azione della modalità. v = variante scelta col tasto «È …?».
+function act(pick, auto, scan, doubt = false, v = null) {
+  const row = byId.get(pick.id), p = { id: pick.id, l: pick.lang, v: v || pickVariant(row[8], sticky) };
   const rec = record(p, auto), name = row[1], info = describe(p), s = semaphore(data.copies, p, sameArtId);
   const missing = row[8]?.length && (sticky.r && p.v[0] !== 'r' ? 'Reverse' : sticky.h && p.v[0] !== 'h' ? 'Holo' : sticky.first && !p.v.includes('1st-edition') ? '1ª edizione' : '');
   const note = missing ? `${missing} non esiste per questa carta` : '';
   // Annulla: toglie quello che è stato fatto e chiede la stampa giusta (o «Rifai»).
   const fix = undo => () => { undo?.(); rec.undo = 1; save(); renderStats(); setState('risultato'); askPrint(scan); };
+  // Altra variante della stessa stampa con un tocco (tra quelle che esistono; giapponesi: normale, reverse, holo).
+  const vars = row[8]?.length ? [...new Set(row[8])] : ['n', 'r', 'h'], nextV = vars[(vars.indexOf(p.v) + 1) % vars.length];
+  const other = undo => vars.length > 1 && [`È ${variantLabel(nextV)}?`, () => { undo?.(); rec.vfix = nextV; save(); pending = { ...scan.pending }; act(pick, auto, scan, doubt, nextV); }];
   const add = (extra, kind, title, lines) => {
     const c = { k: newKey(), ...p, c: col, s: 0, t: Date.now(), ...(doubt ? { d: 1, alt: scan.pending.ranked } : {}), ...extra };
     data.copies.push(c); store();
-    verdict(kind, title, name, [...lines, info, note, doubt ? 'Stampa incerta: da rivedere nel Menu' : ''], fix(() => { data.copies = data.copies.filter(x => x.k !== c.k); store(); }));
+    const remove = () => { data.copies = data.copies.filter(x => x.k !== c.k); store(); };
+    verdict(kind, title, name, [...lines, info, note, doubt ? 'Stampa incerta: da rivedere nel Menu' : ''], fix(remove), 'Annulla', other(remove));
     setState('via');
   };
   if (mode === 'scarto') return add({ s: 1 }, 'viola', 'Negli scarti', []);
   if (mode === 'sistema') return system(p, name, info, fix);
   if (mode === 'controllo') {
-    verdict(s.color, TITLE[s.color], name, [info, ...have(s.color === 'rosso' ? s.exact : s.same), note, 'Controllo: non salvata'], fix(), 'Sbagliata?');
+    verdict(s.color, TITLE[s.color], name, [info, ...have(s.color === 'rosso' ? s.exact : s.same), note, 'Controllo: non salvata'], fix(), 'Sbagliata?', other());
     return setState('via');
   }
   if (s.color === 'verde') return add({}, 'verde', 'Nuova', [`Aggiunta a «${col}»`]);
@@ -472,8 +476,8 @@ function system(p, name, info, fix) {
 }
 
 // Colore a tutto schermo per un attimo, poi una striscia in alto finché non arriva la carta dopo.
-let vTimer, undoFn = null;
-function verdict(kind, title, name, lines, undo = null, undoLabel = 'Annulla') {
+let vTimer, undoFn = null, otherFn = null;
+function verdict(kind, title, name, lines, undo = null, undoLabel = 'Annulla', other = null) {
   const v = $('verdict');
   v.className = `verdict ${kind}`;
   v.hidden = false;
@@ -483,6 +487,9 @@ function verdict(kind, title, name, lines, undo = null, undoLabel = 'Annulla') {
   undoFn = undo;
   $('undo').hidden = !undo;
   $('undo').textContent = undoLabel;
+  otherFn = other?.[1];
+  $('other').hidden = !other;
+  $('other').textContent = other?.[0] || '';
   clearTimeout(vTimer);
   vTimer = setTimeout(() => v.classList.add('small'), 1600);
   feedback(kind);
@@ -660,7 +667,7 @@ function summary(all) {
   return {
     n, auto: auto.length, autoWrong: auto.filter(r => r.undo).length, asked: asked.length,
     askedRight: asked.filter(r => r.p === r.pi && r.l === r.pl).length, top1: hit(1, 'c'), top5: hit(5, 'c'),
-    ms: n ? Math.round(list.reduce((s, r) => s + r.ms, 0) / n) : 0, redo: all.length - n,
+    ms: n ? Math.round(list.reduce((s, r) => s + r.ms, 0) / n) : 0, redo: all.length - n, vfix: list.filter(r => r.vfix).length,
   };
 }
 const pct = (a, n) => n ? `${Math.round(100 * a / n)}%` : '—';
@@ -673,12 +680,13 @@ function renderStats() {
 function tableRows() {
   return [['Tutte', results], ...Object.entries(MODES).map(([m, name]) => [name, results.filter(r => r.m === m)])]
     .filter(([, l]) => l.length)
-    .map(([name, l]) => { const s = summary(l); return [name, s.n, pct(s.auto, s.n), pct(s.autoWrong, s.auto), pct(s.askedRight, s.asked), pct(s.top1, s.n), pct(s.top5, s.n), s.ms, s.redo]; });
+    .map(([name, l]) => { const s = summary(l); return [name, s.n, pct(s.auto, s.n), pct(s.autoWrong, s.auto), pct(s.askedRight, s.asked), pct(s.top1, s.n), pct(s.top5, s.n), s.ms, s.redo, s.vfix]; });
 }
 
-function openMenu() {
+async function openMenu() {
+  if (NATIVE) nativeInfo = await Scanner.info().catch(() => nativeInfo);
   renderCollection();
-  const head = ['', 'n.', 'da sola', 'annullate tra le da sole', 'proposta giusta quando chiede', 'disegno 1°', 'prime 5', 'ms', 'rifatte (foto poco chiara)'];
+  const head = ['', 'n.', 'da sola', 'annullate tra le da sole', 'proposta giusta quando chiede', 'disegno 1°', 'prime 5', 'ms', 'rifatte (foto poco chiara)', 'variante cambiata'];
   const t = document.createElement('table');
   t.innerHTML = `<tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>`;
   for (const r of tableRows()) { const tr = t.insertRow(); r.forEach(v => { tr.insertCell().textContent = v; }); }
@@ -690,7 +698,7 @@ function openMenu() {
 
 function copyResults() {
   const lines = ['SCANNER CARTE — risultati', `motore ${backend} · verifica ${checks.join(' ')} · isolata ${self.crossOriginIsolated} · catalogo ${cards.length} · fotocamera ${camInfo()} · ${navigator.userAgent}`,
-    'gruppo | n | da sola | annullate tra le da sole | proposta giusta quando chiede | disegno 1° | prime 5 | ms | rifatte', ...tableRows().map(r => r.join(' | ')),
+    'gruppo | n | da sola | annullate tra le da sole | proposta giusta quando chiede | disegno 1° | prime 5 | ms | rifatte | variante cambiata', ...tableRows().map(r => r.join(' | ')),
     ...(crash ? ['ERRORE', crash.slice(0, 3000)] : []), 'DATI', ...results.map(r => JSON.stringify(r))];
   copyOut(lines.join('\n'), $('copy'), 'Copiati: incollali in chat');
 }
@@ -700,6 +708,7 @@ $('none').addEventListener('click', () => decide(null));
 $('later').addEventListener('click', () => decide('later'));
 $('redo').addEventListener('click', () => decide(undefined));
 $('undo').addEventListener('click', () => { const fn = undoFn; undoFn = null; $('verdict').hidden = true; fn?.(); });
+$('other').addEventListener('click', () => { const fn = otherFn; otherFn = null; fn?.(); });
 $('langPick').addEventListener('click', e => { const b = e.target.closest('[data-lang]'); if (b) setPickLang(b.dataset.lang); });
 $('modeBtn').addEventListener('click', () => { renderMode(); $('modeSheet').classList.add('show'); });
 $('modes').addEventListener('click', e => {
