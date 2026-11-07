@@ -126,6 +126,12 @@ if (!self.crossOriginIsolated && 'serviceWorker' in navigator && !window.Capacit
     location.reload();
   }).catch(() => { /* resta a un core: funziona lo stesso */ });
 </script>
-<script type="module" src="app.js"></script>
+<script>
+// Se la pagina si blocca per un errore, lo scrive sulla schermata di caricamento (utile nell'APK, senza console).
+const showError = msg => { const m = document.getElementById('loadMsg'); if (m) m.textContent = 'Errore: ' + msg; };
+addEventListener('error', e => showError(e.message || e.error));
+addEventListener('unhandledrejection', e => showError(e.reason?.message || e.reason));
+</script>
+<script type="module" src="app.js" onerror="showError('app.js non caricato')"></script>
 </body>
 </html>

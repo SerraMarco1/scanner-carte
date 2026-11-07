@@ -5,9 +5,11 @@
 import { CARD_W, CARD_H, SIZE, DIM, artRect, toTensorData, normalize, scoreAll, topK, artSim, probeInput, candidatePrints, choosePrint } from './core.js';
 import { loadCV, findCard, warpCard } from './bordi.js';
 import { readCard, latinLanguage, asianLanguage, cardNumber } from './testo.js';
+// registerPlugin non è nel ponte nativo di Capacitor: sta nella sua libreria (copia di @capacitor/core 8.5.3).
+import { registerPlugin } from './capacitor-core.js';
 
 const NATIVE = !!window.Capacitor?.isNativePlatform?.();
-const Scanner = NATIVE ? window.Capacitor.registerPlugin('Scanner') : null;
+const Scanner = NATIVE ? registerPlugin('Scanner') : null;
 const ORT_DIST = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
 let ort; // solo nella versione web: nell'APK il modello gira nativo
 const MODEL_URL = 'https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/';
