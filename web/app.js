@@ -18,6 +18,8 @@ const OCR_W = 640, OCR_H = 892; // carta raddrizzata per leggere le scritte picc
 const STORE = 'scanner-proto-risultati', CAM = 'scanner-proto-obiettivo', LAST_LANG = 'scanner-proto-lingua';
 const LANGS = { it: 'italiano', en: 'inglese', fr: 'francese', de: 'tedesco', es: 'spagnolo', pt: 'portoghese', ja: 'giapponese', zh: 'cinese', ko: 'coreano' };
 const $ = id => document.getElementById(id);
+// Il catalogo non sta nell'APK: si prende dal sito e si tiene sul telefono, così si aggiorna senza reinstallare.
+const DATA = window.Capacitor?.isNativePlatform?.() ? 'https://serramarco1.github.io/scanner-carte/data/' : 'data/';
 
 let session, backend, ocr, cards, byId, idx, artCat, fullCat, track, shotInfo = '', nativeInfo = null, crash = '';
 let sleeve = false, pending = null, torchOn = false, cams = [], checks = [], pickLang = 'it', lastLang = 'it';
@@ -55,6 +57,29 @@ async function getBytes(url, label, keep) {
   let o = 0;
   for (const p of parts) { bytes.set(p, o); o += p.length; }
   try { await cache?.put(url, new Response(bytes)); } catch { /* spazio pieno: si riscarica la prossima volta */ }
+  return bytes;
+}
+
+// Elenco carte: aggiornato se c'è rete, altrimenti l'ultimo salvato.
+async function freshBytes(url, label) {
+  try {
+    const bytes = await getBytes(url, label);
+    try { await (await caches.open('scanner-proto-v1')).put(url, new Response(bytes)); } catch { /* resta solo in memoria */ }
+    return bytes;
+  } catch (e) {
+    const hit = await caches.open('scanner-proto-v1').then(c => c.match(url)).catch(() => null);
+    if (hit) return new Uint8Array(await hit.arrayBuffer());
+    throw new Error(`${e.message}. Serve internet al primo avvio`);
+  }
+}
+
+// Impronte: salvate per versione del catalogo; le versioni vecchie si cancellano.
+async function catalogBin(name, label, version) {
+  const v = encodeURIComponent(version), bytes = await getBytes(`${DATA}${name}?v=${v}`, label, true);
+  try {
+    const c = await caches.open('scanner-proto-v1');
+    for (const r of await c.keys()) if (r.url.includes(`/${name}?v=`) && !r.url.endsWith(v)) await c.delete(r);
+  } catch { /* pulizia rimandata */ }
   return bytes;
 }
 
@@ -121,7 +146,10 @@ async function startNative() {
   loading('Accendo la fotocamera…');
   nativeInfo = await Scanner.start();
   loading('Avvio il riconoscimento…');
+  const progress = await Scanner.addListener('download', ({ got, total }) =>
+    loading(`Scarico il modello (solo la prima volta): ${Math.round(got / 1e6)} di ${Math.round(total / 1e6)} MB`, got / total));
   const { probe: pv } = await Scanner.prepare();
+  progress.remove();
   const probe = (await (await fetch('data/probe.json')).json()).v;
   const sim = pv.reduce((a, x, i) => a + x * probe[i], 0);
   checks.push(`nativo ${sim.toFixed(3)}`);
@@ -136,12 +164,12 @@ async function startNative() {
 
 async function init() {
   try {
-    const meta = JSON.parse(new TextDecoder().decode(await getBytes('data/cards.json', 'elenco carte')));
+    const meta = JSON.parse(new TextDecoder().decode(await freshBytes(DATA + 'cards.json', 'elenco carte')));
     cards = meta.cards;
     byId = new Map(cards.map(c => [c[0], c]));
     idx = new Map(cards.map((c, i) => [c[0], i]));
-    artCat = new Int8Array((await getBytes('data/art.bin', 'impronte illustrazioni')).buffer);
-    fullCat = new Int8Array((await getBytes('data/full.bin', 'impronte carte')).buffer);
+    artCat = new Int8Array((await catalogBin('art.bin', 'impronte illustrazioni', meta.built)).buffer);
+    fullCat = new Int8Array((await catalogBin('full.bin', 'impronte carte', meta.built)).buffer);
     if (NATIVE) await startNative();
     else {
       ort = await import(ORT_DIST + 'ort.webgpu.min.mjs');

@@ -59,6 +59,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.util.ArrayList;
@@ -216,16 +218,38 @@ public class ScannerPlugin extends Plugin {
         });
     }
 
-    // ONNX Runtime legge il modello da file: la prima volta lo si copia dall'APK.
+    // Il modello (88 MB) non sta nell'APK: si scarica al primo avvio e resta nei file dell'app.
+    // Stesso file e stessa versione usati per il catalogo e per data/probe.json.
+    private static final String MODEL_URL = "https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/model.onnx";
+    private static final long MODEL_SIZE = 88532934L;
+
     private File modelFile() throws Exception {
         File f = new File(getContext().getFilesDir(), "model.onnx");
-        long size;
-        try (InputStream in = getContext().getAssets().open("model.onnx")) { size = in.available(); }
-        if (f.exists() && f.length() > 0 && f.length() >= size) return f;
-        try (InputStream in = getContext().getAssets().open("model.onnx"); OutputStream out = new FileOutputStream(f)) {
-            byte[] buf = new byte[1 << 20];
-            for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+        if (f.length() == MODEL_SIZE) return f;
+        File part = new File(getContext().getFilesDir(), "model.onnx.part");
+        HttpURLConnection http = (HttpURLConnection) new URL(MODEL_URL).openConnection();
+        http.setInstanceFollowRedirects(true);
+        http.setConnectTimeout(20000);
+        http.setReadTimeout(30000);
+        try (InputStream in = http.getInputStream(); OutputStream out = new FileOutputStream(part)) {
+            byte[] buf = new byte[1 << 16];
+            long got = 0, told = 0;
+            for (int n; (n = in.read(buf)) > 0; ) {
+                out.write(buf, 0, n);
+                got += n;
+                if (got - told >= (1 << 20)) { // avanzamento per la barra della pagina, ogni MB
+                    told = got;
+                    JSObject o = new JSObject();
+                    o.put("got", got);
+                    o.put("total", MODEL_SIZE);
+                    notifyListeners("download", o);
+                }
+            }
+        } finally {
+            http.disconnect();
         }
+        if (part.length() != MODEL_SIZE) { part.delete(); throw new Exception("modello scaricato a metà: controlla la connessione e riapri l'app"); }
+        if (!part.renameTo(f)) throw new Exception("non riesco a salvare il modello");
         return f;
     }
 

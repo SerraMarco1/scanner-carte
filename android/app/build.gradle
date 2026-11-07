@@ -18,7 +18,6 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
-    androidResources { noCompress 'onnx', 'bin' } // il modello si copia/legge così com'è
     // Firma fissa (chiave nei segreti del repository GitHub): senza, ogni APK nuovo andrebbe disinstallato prima.
     signingConfigs {
         release {

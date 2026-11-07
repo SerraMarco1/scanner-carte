@@ -2,4 +2,3 @@ node_modules/
 catalogo/cache/
 .claude/
 firma-android/
-android/app/src/main/assets/model.onnx

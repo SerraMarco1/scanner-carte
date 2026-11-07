@@ -25,12 +25,12 @@ jobs:
           distribution: temurin
           java-version: 21
       - run: npm ci
-      - name: Modello delle impronte (stesso del catalogo, versione completa)
-        run: |
-          mkdir -p android/app/src/main/assets
-          curl -sfL -o android/app/src/main/assets/model.onnx "https://huggingface.co/onnx-community/dinov2-small/resolve/8b1f705a3a7f6f062f6bdd21986c1583d3ef105d/onnx/model.onnx"
       - name: Pagina dentro l'app
-        run: npx cap sync android
+        # Modello e catalogo non entrano nell'APK: l'app li scarica al primo avvio (APK da ~200 a ~90 MB).
+        run: |
+          npx cap sync android
+          rm -f android/app/src/main/assets/public/data/art.bin android/app/src/main/assets/public/data/full.bin android/app/src/main/assets/public/data/cards.json
+          ls android/app/src/main/assets/public/data
       - name: APK
         working-directory: android
         env:
