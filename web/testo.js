@@ -110,7 +110,11 @@ export function latinLanguage(lines) {
   return best && (!next || best[1] > next[1]) ? { lang: best[0], why: why[best[0]].join(', ') } : null;
 }
 
-export const asianLanguage = text => /[぀-ヿ]/.test(text) ? 'ja' : /[一-鿿]/.test(text) ? 'zh' : /[가-힯]/.test(text) ? 'ko' : null;
+// Lingua asiatica solo con almeno 4 caratteri tipici: uno o due «trovati» su una carta italiana sono errori di lettura.
+export function asianLanguage(text) {
+  const count = re => (text.match(re) || []).length;
+  return count(/[぀-ヿ]/g) >= 4 ? 'ja' : count(/[가-힯]/g) >= 4 ? 'ko' : count(/[一-鿿]/g) >= 4 ? 'zh' : null;
+}
 
 // Numero di collezione dalle righe in fondo alla carta: «025/198», «TG05/TG30», o promo come «SWSH145».
 // Insieme al numero tiene `bottom`, il testo grezzo in fondo: serve a confrontare con le stampe candidate

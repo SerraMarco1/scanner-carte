@@ -84,6 +84,9 @@ import ai.onnxruntime.OrtSession;
 public class ScannerPlugin extends Plugin {
     // Come web/core.js
     private static final int CARD_W = 320, CARD_H = 446, OCR_W = 640, OCR_H = 892, SIZE = 224, DIM = 384;
+    // Il testo si legge a doppia risoluzione (1280×1784): a 640×892 il numero in fondo alla carta spariva.
+    // Le coordinate delle righe tornano alla pagina in scala 640×892, come nella versione web.
+    private static final int OCR_SCALE = 2;
     private static final double ART_X = 0.08, ART_Y = 0.10, ART_W = 0.84, ART_H = 0.44;
     private static final float[] MEAN = { 0.485f, 0.456f, 0.406f }, STD = { 0.229f, 0.224f, 0.225f };
     // Come web/bordi.js
@@ -110,7 +113,7 @@ public class ScannerPlugin extends Plugin {
     private OrtEnvironment env;
     private OrtSession session;
     private TextRecognizer latin, japanese, korean, chinese;
-    private Bitmap lastCard;        // carta raddrizzata 640×892, per le letture asiatiche successive
+    private Bitmap lastCard;        // carta raddrizzata 1280×1784, per le letture asiatiche successive
 
     // ---------- avvio ----------
 
@@ -414,7 +417,7 @@ public class ScannerPlugin extends Plugin {
                 float[] va = embed(artMat), vf = embed(small);
                 artMat.release();
                 long t1 = SystemClock.uptimeMillis();
-                Bitmap card = Bitmap.createBitmap(OCR_W, OCR_H, Bitmap.Config.ARGB_8888);
+                Bitmap card = Bitmap.createBitmap(OCR_W * OCR_SCALE, OCR_H * OCR_SCALE, Bitmap.Config.ARGB_8888);
                 Utils.matToBitmap(hi, card);
                 lastCard = card;
                 JSArray lines = read(latinReader(), card);
@@ -437,9 +440,9 @@ public class ScannerPlugin extends Plugin {
 
     private static void warp(Mat frame, Point[] q, Mat out) {
         MatOfPoint2f from = new MatOfPoint2f(q[0], q[1], q[2], q[3]);
-        MatOfPoint2f to = new MatOfPoint2f(new Point(0, 0), new Point(OCR_W, 0), new Point(OCR_W, OCR_H), new Point(0, OCR_H));
+        MatOfPoint2f to = new MatOfPoint2f(new Point(0, 0), new Point(OCR_W * OCR_SCALE, 0), new Point(OCR_W * OCR_SCALE, OCR_H * OCR_SCALE), new Point(0, OCR_H * OCR_SCALE));
         Mat m = Imgproc.getPerspectiveTransform(from, to);
-        Imgproc.warpPerspective(frame, out, m, new org.opencv.core.Size(OCR_W, OCR_H), Imgproc.INTER_LINEAR);
+        Imgproc.warpPerspective(frame, out, m, new org.opencv.core.Size(OCR_W * OCR_SCALE, OCR_H * OCR_SCALE), Imgproc.INTER_LINEAR);
         from.release(); to.release(); m.release();
     }
 
@@ -507,10 +510,10 @@ public class ScannerPlugin extends Plugin {
                 if (b == null) continue;
                 JSObject o = new JSObject();
                 o.put("text", line.getText());
-                o.put("x", b.left);
-                o.put("y", b.top);
-                o.put("w", b.width());
-                o.put("h", b.height());
+                o.put("x", b.left / OCR_SCALE);
+                o.put("y", b.top / OCR_SCALE);
+                o.put("w", b.width() / OCR_SCALE);
+                o.put("h", b.height() / OCR_SCALE);
                 out.put(o);
             }
         return out;
