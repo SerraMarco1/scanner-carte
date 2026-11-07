@@ -2,3 +2,5 @@ node_modules/
 catalogo/cache/
 .claude/
 firma-android/
+__pycache__/
+.playwright-mcp/

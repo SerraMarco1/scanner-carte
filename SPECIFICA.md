@@ -1,6 +1,6 @@
 # Scanner Carte — specifica
 
-Nome provvisorio: **Scanner Carte**. Stato al 5 novembre 2026: requisiti chiusi, nessun codice scritto.
+Nome provvisorio: **Scanner Carte**. Stato al 7 novembre 2026: v1 dello scanner in prova (README.md); amici, scambi e prezzi ancora da fare.
 Fonte delle decisioni: questionario (93 risposte) + 4 domande di chiarimento.
 
 ## 1. Obiettivo
@@ -50,7 +50,7 @@ Inquadrando una carta Pokémon, l'app dice subito se ce l'hai già, in quale ver
 
 ## 7. Modalità
 1. **Controllo**: solo semaforo, non registra niente.
-2. **Inventario**: le carte entrano nella collezione scelta all'inizio della sessione; i dubbi finiscono in una lista da rivedere.
+2. **Inventario**: le carte entrano nella collezione scelta all'inizio della sessione. Nei dubbi chiede subito quale stampa è, oppure «Rivedi dopo»: entra la più probabile, in una lista da rivedere.
 3. **Scarto**: tutto negli scarti, senza semaforo.
 4. **Sistema** (nuova): scansioni carte che hai già e passano nella collezione scelta. Se hai più copie, chiede quale.
 

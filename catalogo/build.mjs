@@ -19,20 +19,70 @@ const ONLY_DL = process.argv.includes('--solo-scaricare'), NO_DL = process.argv.
 const OUT = path.join(ROOT, 'web/data');
 const safe = s => s.replace(/[^A-Za-z0-9._-]/g, '_');
 
+const setOf = id => id.slice(0, id.lastIndexOf('-'));
+const words = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[^a-z0-9 ]/g, '').split(' ').filter(w => w.length > 3);
+
 async function englishCards() {
-  const list = await fetchRetry('https://api.tcgdex.net/v2/en/cards');
+  // A1…, B1…, P-A = TCG Pocket: carte solo digitali, non esistono stampate.
+  const list = (await fetchRetry('https://api.tcgdex.net/v2/en/cards')).filter(c => !/^([AB]\d|P-[A-Z])/.test(setOf(c.id)));
   const sets = Object.fromEntries((await fetchRetry('https://api.tcgdex.net/v2/en/sets')).map(s => [s.id, s]));
   // In quali altre lingue TCGdex conosce la stessa carta (stesso id): aiuta a scegliere la stampa.
   const langs = {};
   for (const [lang, bit] of Object.entries(LANG_BITS))
     for (const c of await fetchRetry(`https://api.tcgdex.net/v2/${lang}/cards`)) langs[c.id] = (langs[c.id] || 0) | bit;
-  // /tcgp/ = TCG Pocket: carte solo digitali, non esistono stampate.
-  return list.filter(c => c.image && !c.image.includes('/tcgp/')).slice(0, LIMIT).map(c => {
-    const set = sets[c.image.split('/').at(-2)];
-    return { id: c.id, name: c.name, set: set?.name || c.image.split('/').at(-2), num: c.localId, lang: 'en',
-      total: String(set?.cardCount?.official ?? ''), langs: langs[c.id] || 0,
-      img: c.image + '/low.webp', file: `en/${safe(c.id)}.webp` };
+  const backup = await englishBackup(list.filter(c => !c.image), sets);
+  const cards = list.filter(c => c.image || backup.has(c.id)).slice(0, LIMIT);
+  const vars = await variants(cards.map(c => c.id));
+  return cards.map(c => {
+    const set = sets[setOf(c.id)];
+    return { id: c.id, name: c.name, set: set?.name || setOf(c.id), num: c.localId, lang: 'en',
+      total: String(set?.cardCount?.official ?? ''), langs: langs[c.id] || 0, vars: vars[c.id] || [],
+      img: c.image ? c.image + '/low.webp' : backup.get(c.id), file: `en/${safe(c.id)}.webp` };
   });
+}
+
+// ~1.600 carte inglesi non hanno immagine su TCGdex (Galleria GG, Trainer Gallery, Shiny Vault, promo…):
+// si prende quella di PTCG-database (pkmncards.com). Abbinate per nome e numero, ma solo dentro la serie
+// che raccoglie più corrispondenze: lo stesso nome e numero esiste in molte serie.
+async function englishBackup(missing, sets) {
+  const dir = path.join(CACHE, 'ptcg-database/data_en');
+  if (!existsSync(dir)) { console.log('  manca ptcg-database/data_en: carte inglesi senza immagine saltate'); return new Map(); }
+  const key = (name, num) => `${String(name).toLowerCase().normalize('NFD').replace(/[^a-z0-9]/g, '')}|${String(num).toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^([A-Z]*)0+(?=\d)/, '$1')}`;
+  const idx = new Map();
+  for (const f of await fs.readdir(dir, { recursive: true })) {
+    if (!f.endsWith('.json')) continue;
+    let c;
+    try { c = JSON.parse(await fs.readFile(path.join(dir, f), 'utf8')); } catch { continue; }
+    if (c.img) idx.set(key(c.name, c.number), [...(idx.get(key(c.name, c.number)) || []), c]);
+  }
+  const out = new Map();
+  for (const [sid, group] of Map.groupBy(missing, c => setOf(c.id))) {
+    const votes = new Map();
+    for (const c of group) for (const m of idx.get(key(c.name, c.localId)) || []) votes.set(m.set_full_name, (votes.get(m.set_full_name) || 0) + 1);
+    const [best, n] = [...votes].sort((a, b) => b[1] - a[1])[0] || [];
+    const shared = words(best).some(w => words(sets[sid]?.name).includes(w));
+    if (!best || n < 0.5 * group.length || (n < 3 && !shared)) continue;
+    for (const c of group) { const m = idx.get(key(c.name, c.localId))?.find(x => x.set_full_name === best); if (m) out.set(c.id, m.img); }
+  }
+  console.log(`  carte inglesi senza immagine su TCGdex: ${missing.length}, recuperate da PTCG-database: ${out.size}`);
+  return out;
+}
+
+// Varianti di ogni stampa (normale, reverse, holo, timbri come la 1ª edizione), una richiesta per carta:
+// tenute in catalogo/cache/varianti.json. Codice: n/r/h, «:sottotipo», «+timbro», «~tipo di lamina».
+async function variants(ids) {
+  const file = path.join(CACHE, 'varianti.json');
+  const cache = existsSync(file) ? JSON.parse(await fs.readFile(file, 'utf8')) : {};
+  const todo = ids.filter(id => !(id in cache));
+  let done = 0;
+  await pool(todo, 12, async id => {
+    const c = await fetchRetry(`https://api.tcgdex.net/v2/en/cards/${encodeURIComponent(id)}`).catch(() => null);
+    if (c) cache[id] = [...new Set((c.variants_detailed || []).filter(v => !v.size || v.size === 'standard')
+      .map(v => `${v.type?.[0] || 'n'}${v.subtype ? ':' + v.subtype : ''}${(v.stamp || []).map(s => '+' + s).join('')}${v.foil ? '~' + v.foil : ''}`))];
+    if (++done % 1000 === 0) { console.log(`  varianti ${done}/${todo.length}`); await fs.writeFile(file, JSON.stringify(cache)); }
+  });
+  await fs.writeFile(file, JSON.stringify(cache));
+  return cache;
 }
 
 async function japaneseCards() {
@@ -46,7 +96,7 @@ async function japaneseCards() {
       try { c = JSON.parse(await fs.readFile(path.join(dir, set, f), 'utf8')); } catch { continue; }
       if (!c.img || !c.jp_id) continue;
       out.push({ id: `jp-${c.jp_id}`, name: c.name, set: c.set_name || set,
-        num: c.set_total ? `${c.number}/${c.set_total}` : (c.number || ''), lang: 'ja', total: c.set_total || '', langs: 0,
+        num: c.set_total ? `${c.number}/${c.set_total}` : (c.number || ''), lang: 'ja', total: c.set_total || '', langs: 0, vars: [],
         img: c.img, file: `ja/${c.jp_id}.webp`, jpId: c.jp_id });
     }
   }
@@ -112,8 +162,8 @@ await fs.writeFile(path.join(OUT, 'art.bin'), art);
 await fs.writeFile(path.join(OUT, 'full.bin'), full);
 await fs.writeFile(path.join(OUT, 'cards.json'), JSON.stringify({
   built: new Date().toISOString(), model: 'onnx-community/dinov2-small@8b1f705', dim: DIM, crop: ART,
-  fields: ['id', 'name', 'set', 'num', 'lang', 'img', 'total', 'langs'],
-  cards: cards.map(c => [c.id, c.name, c.set, c.num, c.lang, c.img, c.total, c.langs]),
+  fields: ['id', 'name', 'set', 'num', 'lang', 'img', 'total', 'langs', 'vars'],
+  cards: cards.map(c => [c.id, c.name, c.set, c.num, c.lang, c.img, c.total, c.langs, c.vars]),
 }));
 console.log(`Scritto web/data: ${cards.length} carte`);
 console.timeEnd('catalogo');

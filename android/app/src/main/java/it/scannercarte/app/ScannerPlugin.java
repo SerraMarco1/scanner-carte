@@ -1,6 +1,10 @@
 package it.scannercarte.app;
 
 import android.Manifest;
+import android.content.Context;
+import android.os.Build;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.os.SystemClock;
@@ -48,6 +52,7 @@ import org.opencv.android.Utils;
 import org.opencv.core.Core;
 import org.opencv.core.CvType;
 import org.opencv.core.Mat;
+import org.opencv.core.MatOfInt;
 import org.opencv.core.MatOfPoint;
 import org.opencv.core.MatOfPoint2f;
 import org.opencv.core.Point;
@@ -111,7 +116,9 @@ public class ScannerPlugin extends Plugin {
     private byte[] rowBuf;
 
     private OrtEnvironment env;
-    private OrtSession session;
+    private OrtSession session, edges;
+    // Modello dei bordi (catalogo/bordi): ingresso RGB 192×256, uscita probabilità «carta» 96×128.
+    private static final int EDGE_W = 192, EDGE_H = 256;
     private TextRecognizer latin, japanese, korean, chinese;
     private Bitmap lastCard;        // carta raddrizzata 1280×1784, per le letture asiatiche successive
 
@@ -210,6 +217,21 @@ public class ScannerPlugin extends Plugin {
                     opts.setIntraOpNumThreads(4);
                     session = env.createSession(modelFile().getAbsolutePath(), opts);
                 }
+                if (edges == null) {
+                    // Sta nell'APK (pagina web, data/bordi.onnx); se manca resta la ricerca dei bordi con Canny.
+                    try (InputStream in = getContext().getAssets().open("public/data/bordi.onnx")) {
+                        ByteArrayOutputStream b = new ByteArrayOutputStream();
+                        byte[] buf = new byte[1 << 16];
+                        for (int n; (n = in.read(buf)) > 0; ) b.write(buf, 0, n);
+                        OrtSession.SessionOptions eo = new OrtSession.SessionOptions();
+                        eo.setIntraOpNumThreads(2);
+                        edges = env.createSession(b.toByteArray(), eo);
+                    } catch (Exception e) {
+                        JSObject o = new JSObject();
+                        o.put("message", "Modello dei bordi non caricato: " + e.getMessage());
+                        notifyListeners("error", o);
+                    }
+                }
                 float[] probe = run(probeInput());
                 JSObject o = new JSObject();
                 o.put("probe", toJs(probe));
@@ -271,7 +293,16 @@ public class ScannerPlugin extends Plugin {
             if (now - lastProcessed < FRAME_MS || session == null) return;
             lastProcessed = now;
             Mat rgba = upright(toMat(image), image.getImageInfo().getRotationDegrees());
-            Point[] q = findCard(rgba);
+            Point[] q;
+            try { q = edges != null ? findByModel(rgba) : findCard(rgba); }
+            catch (Exception e) {
+                // Un errore del modello non deve fermare lo scanner: si torna ai bordi con Canny e lo si segnala.
+                edges = null;
+                q = findCard(rgba);
+                JSObject o = new JSObject();
+                o.put("message", "Modello dei bordi: " + e);
+                notifyListeners("error", o);
+            }
             int w = rgba.cols(), h = rgba.rows();
             still = q != null && prevQuad != null && !moved(q, prevQuad, Math.max(w, h)) ? still + 1 : 0;
             prevQuad = q;
@@ -366,6 +397,103 @@ public class ScannerPlugin extends Plugin {
         } finally {
             small.release(); gray.release(); edges.release(); hier.release(); kernel.release();
         }
+    }
+
+    // Come findByModel di web/bordi.js: il modello vede il centro 3:4 verticale del fotogramma.
+    private Point[] findByModel(Mat rgba) throws Exception {
+        int w = rgba.cols(), h = rgba.rows();
+        int cw = (int) Math.min(w, h * 0.75), ch = (int) Math.min(h, Math.round(cw / 0.75)), cx = (w - cw) / 2, cy = (h - ch) / 2;
+        Mat crop = new Mat(rgba, new org.opencv.core.Rect(cx, cy, cw, ch)), small = new Mat();
+        try {
+            Imgproc.resize(crop, small, new org.opencv.core.Size(EDGE_W, EDGE_H), 0, 0, Imgproc.INTER_AREA);
+            int n = EDGE_W * EDGE_H;
+            byte[] px = new byte[n * 4];
+            small.get(0, 0, px);
+            float[] t = new float[3 * n];
+            for (int i = 0; i < n; i++) for (int c = 0; c < 3; c++) t[c * n + i] = px[i * 4 + c] & 0xFF;
+            float[] prob = new float[n / 4];
+            try (OnnxTensor x = OnnxTensor.createTensor(env, FloatBuffer.wrap(t), new long[] { 1, 3, EDGE_H, EDGE_W });
+                 OrtSession.Result r = edges.run(Collections.singletonMap("image", x))) {
+                ((OnnxTensor) r.get(0)).getFloatBuffer().get(prob);
+            }
+            Point[] q = quadFromMask(prob);
+            if (q == null) return null;
+            for (Point p : q) { p.x = cx + p.x * cw / EDGE_W; p.y = cy + p.y * ch / EDGE_H; }
+            return q;
+        } finally {
+            crop.release(); small.release();
+        }
+    }
+
+    // Maschera 96×128 → angoli nell'ingresso 192×256: contorno più grande, involucro convesso, poligono a 4 lati
+    // che lo segue meglio (o rettangolo ruotato che lo contiene). Come quadFromMask di web/bordi.js.
+    private static Point[] quadFromMask(float[] prob) {
+        Mat p = new Mat(EDGE_H / 2, EDGE_W / 2, CvType.CV_32F), big = new Mat(), m = new Mat(), hier = new Mat();
+        List<MatOfPoint> cs = new ArrayList<>();
+        try {
+            p.put(0, 0, prob);
+            Imgproc.resize(p, big, new org.opencv.core.Size(EDGE_W, EDGE_H), 0, 0, Imgproc.INTER_LINEAR);
+            Imgproc.threshold(big, big, 0.5, 255, Imgproc.THRESH_BINARY);
+            big.convertTo(m, CvType.CV_8U);
+            Imgproc.findContours(m, cs, hier, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_NONE);
+            MatOfPoint best = null;
+            double bestArea = 0.06 * EDGE_W * EDGE_H;
+            for (MatOfPoint c : cs) { double a = Imgproc.contourArea(c); if (a > bestArea) { best = c; bestArea = a; } }
+            if (best == null) return null;
+            MatOfInt idx = new MatOfInt();
+            Imgproc.convexHull(best, idx);
+            Point[] pts = best.toArray();
+            int[] ids = idx.toArray();
+            idx.release();
+            Point[] hp = new Point[ids.length];
+            for (int k = 0; k < ids.length; k++) hp[k] = pts[ids[k]];
+            MatOfPoint2f hull = new MatOfPoint2f(hp), poly = new MatOfPoint2f();
+            double peri = Imgproc.arcLength(hull, true);
+            Point[] q = null;
+            for (double eps : new double[] { 0.02, 0.03, 0.04, 0.05, 0.06, 0.08 }) {
+                Imgproc.approxPolyDP(hull, poly, eps * peri, true);
+                if (poly.total() == 4) { q = order(poly.toArray()); break; }
+                if (poly.total() < 4) break;
+            }
+            if (q == null) { Point[] b = new Point[4]; Imgproc.minAreaRect(hull).points(b); q = order(b); }
+            hull.release(); poly.release();
+            q = straighten(q, pts);
+            return cardShaped(q) ? q : null;
+        } finally {
+            p.release(); big.release(); m.release(); hier.release();
+            for (MatOfPoint c : cs) c.release();
+        }
+    }
+
+    // Angoli più precisi: per ogni lato una retta sui punti del contorno lontani dagli angoli (arrotondati) e dalle dita,
+    // poi gli incroci delle rette. Come straighten in web/bordi.js.
+    private static Point[] straighten(Point[] q, Point[] pts) {
+        double[][] lines = new double[4][];
+        for (int k = 0; k < 4; k++) {
+            Point a = q[k], b = q[(k + 1) % 4];
+            double dx = b.x - a.x, dy = b.y - a.y, n = Math.hypot(dx, dy), ux = dx / n, uy = dy / n;
+            List<Point> sel = new ArrayList<>();
+            for (Point p : pts) {
+                double t = (p.x - a.x) * ux + (p.y - a.y) * uy, off = Math.abs((p.y - a.y) * ux - (p.x - a.x) * uy);
+                if (t > 0.15 * n && t < 0.85 * n && off < 0.04 * n + 2) sel.add(p);
+            }
+            if (sel.size() < 5) return q;
+            MatOfPoint2f m = new MatOfPoint2f(sel.toArray(new Point[0]));
+            Mat l = new Mat();
+            Imgproc.fitLine(m, l, Imgproc.DIST_HUBER, 0, 0.01, 0.01);
+            lines[k] = new double[] { l.get(0, 0)[0], l.get(1, 0)[0], l.get(2, 0)[0], l.get(3, 0)[0] }; // vx, vy, x0, y0
+            m.release(); l.release();
+        }
+        Point[] out = new Point[4];
+        for (int k = 0; k < 4; k++) {
+            double[] A = lines[(k + 3) % 4], B = lines[k];
+            double det = B[0] * A[1] - A[0] * B[1];
+            if (Math.abs(det) < 1e-6) return q;
+            double s = (B[0] * (B[3] - A[3]) - B[1] * (B[2] - A[2])) / det; // incrocio: p + s·a = r + t·b
+            out[k] = new Point(A[2] + s * A[0], A[3] + s * A[1]);
+            if (Math.max(Math.abs(out[k].x - q[k].x), Math.abs(out[k].y - q[k].y)) >= 0.1 * EDGE_W) return q;
+        }
+        return out;
     }
 
     // Angoli in ordine: alto-sinistra, alto-destra, basso-destra, basso-sinistra.
@@ -546,6 +674,24 @@ public class ScannerPlugin extends Plugin {
                 call.reject("Obiettivo: " + e.getMessage());
             }
         });
+    }
+
+    // Vibrazione del semaforo: pattern in ms (vibra, pausa, vibra…). Nella WebView navigator.vibrate non funziona.
+    @PluginMethod
+    public void vibrate(PluginCall call) {
+        try {
+            JSArray p = call.getArray("pattern", new JSArray());
+            long[] ms = new long[p.length() + 1]; // il primo valore di Android è l'attesa iniziale
+            for (int i = 0; i < p.length(); i++) ms[i + 1] = p.getLong(i);
+            Vibrator v = (Vibrator) getContext().getSystemService(Context.VIBRATOR_SERVICE);
+            if (v != null && v.hasVibrator() && p.length() > 0) {
+                if (Build.VERSION.SDK_INT >= 26) v.vibrate(VibrationEffect.createWaveform(ms, -1));
+                else v.vibrate(ms, -1);
+            }
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Vibrazione: " + e.getMessage());
+        }
     }
 
     @PluginMethod

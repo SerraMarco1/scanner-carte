@@ -4,37 +4,42 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0d0f13">
-<title>Scanner Carte · Prototipo</title>
+<title>Scanner Carte</title>
 <style>
 :root{
   /* un solo tema scuro, come le app fotocamera: la carta inquadrata resta l'elemento più luminoso */
   --bg:#0d0f13; --panel:#171a21; --ink:#f1f3f7; --muted:#9aa1ae; --line:#2b303b;
   --accent:#ffd23f; --ok:#3ccf7d; --bad:#ff6b6b;
+  --verde:#1f9d55; --giallo:#f2c200; --rosso:#d64545; --grigio:#5b6270; --viola:#7b61d9;
   --font:"Segoe UI",Roboto,system-ui,sans-serif;
   color-scheme:dark;
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);overflow:hidden}
-button{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;cursor:pointer}
-button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button,select,input{font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
+button{cursor:pointer}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 #cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
 #overlay{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}
 /* APK: la fotocamera nativa sta sotto la pagina, che diventa trasparente */
 html.native,html.native body{background:transparent}
 html.native #cam,html.native #overlay,html.native #fromPhoto{display:none}
 .hint{flex:1;text-align:center;font-weight:700;background:#000a;border-radius:999px;padding:10px 14px}
-.top{position:fixed;top:0;left:0;right:0;padding:max(10px,env(safe-area-inset-top)) 12px 8px;display:flex;gap:10px;align-items:center;background:linear-gradient(#000a,#0000)}
-.stats{flex:1;font-size:.85rem;line-height:1.3;font-variant-numeric:tabular-nums}
-.stats b{font-size:1rem}
+.top{position:fixed;top:0;left:0;right:0;padding:max(10px,env(safe-area-inset-top)) 12px 8px;display:flex;gap:8px;align-items:center;background:linear-gradient(#000a,#0000)}
+.top button{padding:8px 12px;font-size:.9rem}
+#modeBtn{flex:1;text-align:left;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stats{font-size:.82rem;color:var(--muted);text-align:center;font-variant-numeric:tabular-nums}
 .bottom{position:fixed;left:0;right:0;bottom:0;padding:10px 12px max(14px,env(safe-area-inset-bottom));display:grid;gap:10px;background:linear-gradient(#0000,#000c 40%)}
 .chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
 .chip{padding:6px 12px;border-radius:999px;font-size:.9rem}
 .chip[aria-pressed="true"]{background:var(--accent);color:#111;border-color:var(--accent);font-weight:700}
 .row{display:flex;gap:10px;align-items:center;justify-content:center}
-.side{min-width:84px;font-size:.85rem}
-.sheet{position:fixed;left:0;right:0;bottom:0;max-height:82vh;overflow:auto;background:var(--panel);border-top:1px solid var(--line);border-radius:18px 18px 0 0;padding:14px 14px max(16px,env(safe-area-inset-bottom));display:none}
+.sheet{position:fixed;left:0;right:0;bottom:0;max-height:86vh;overflow:auto;background:var(--panel);border-top:1px solid var(--line);border-radius:18px 18px 0 0;padding:14px 14px max(16px,env(safe-area-inset-bottom));display:none}
 .sheet.show{display:block}
+#menu,#modeSheet{z-index:1}
+#ask,#result{z-index:2} /* sopra il menu: si aprono anche da lì */
 .sheet h2{font-size:1.05rem;margin:0 0 4px}
+.sheet h3{font-size:.95rem;margin:14px 0 6px}
 .sheet p{margin:0 0 10px;color:var(--muted);font-size:.88rem}
 .seen{display:flex;gap:12px;align-items:center;margin-bottom:10px}
 .seen canvas{width:96px;border-radius:4px;border:1px solid var(--line);flex:none}
@@ -49,7 +54,40 @@ html.native #cam,html.native #overlay,html.native #fromPhoto{display:none}
 #langPick .chip{padding:5px 10px;font-size:.85rem}
 .actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
 .actions button{flex:1}
-#result .actions{position:sticky;bottom:calc(-1 * max(16px,env(safe-area-inset-bottom)));background:var(--panel);padding:8px 0 max(16px,env(safe-area-inset-bottom));margin-bottom:calc(-1 * max(16px,env(safe-area-inset-bottom)))}
+.sticky-actions{position:sticky;bottom:calc(-1 * max(16px,env(safe-area-inset-bottom)));background:var(--panel);padding:8px 0 max(16px,env(safe-area-inset-bottom));margin-bottom:calc(-1 * max(16px,env(safe-area-inset-bottom)))}
+.modes{display:grid;gap:8px}
+.modes button{text-align:left}
+.modes button b{display:block}
+.modes button span{color:var(--muted);font-size:.85rem}
+.modes button[aria-pressed="true"]{border-color:var(--accent);border-width:2px}
+.field{display:flex;gap:8px;margin-top:8px}
+.field select,.field input{flex:1;min-width:0}
+.list{display:grid;gap:6px}
+.list .cand{padding:6px}
+.list .cand img{width:44px}
+.pill{display:inline-block;font-size:.72rem;font-weight:700;border-radius:999px;padding:1px 7px;margin-left:4px;background:var(--line)}
+.pill.scarto{background:var(--viola)}
+.pill.dubbio{background:var(--accent);color:#111}
+/* semaforo: colore a tutto schermo per un attimo, poi resta una striscia in alto */
+.verdict{position:fixed;inset:0;display:grid;place-content:center;text-align:center;gap:8px;padding:24px;color:#fff;pointer-events:none}
+.verdict[hidden]{display:none}
+.verdict .box{display:grid;gap:6px;justify-items:center;pointer-events:auto}
+.verdict .vt{font-size:2.4rem;font-weight:800;letter-spacing:.02em}
+.verdict .vn{font-size:1.5rem;font-weight:700}
+.verdict .vl{font-size:1rem;opacity:.95;max-width:36ch}
+.verdict button{background:#0006;border-color:#fff8;margin-top:6px}
+.verdict.verde{background:color-mix(in srgb,var(--verde) 88%,transparent)}
+.verdict.giallo{background:color-mix(in srgb,var(--giallo) 90%,transparent);color:#111}
+.verdict.giallo button{background:#fff6;border-color:#0006}
+.verdict.rosso{background:color-mix(in srgb,var(--rosso) 88%,transparent)}
+.verdict.grigio{background:color-mix(in srgb,var(--grigio) 88%,transparent)}
+.verdict.viola{background:color-mix(in srgb,var(--viola) 88%,transparent)}
+.verdict.small{inset:auto 0 auto 0;top:calc(max(10px,env(safe-area-inset-top)) + 50px);margin:0 10px;border-radius:14px;padding:10px 14px;place-content:stretch;text-align:left}
+.verdict.small .box{justify-items:start;grid-template-columns:1fr auto;align-items:center;gap:2px 10px}
+.verdict.small .vt{font-size:1rem}
+.verdict.small .vn{font-size:1rem;grid-column:1}
+.verdict.small .vl{font-size:.82rem;grid-column:1}
+.verdict.small button{grid-column:2;grid-row:1/span 4;margin:0;padding:8px 12px}
 #loading{position:fixed;inset:0;display:grid;place-content:center;gap:12px;text-align:center;background:var(--bg);padding:24px}
 #loading h1{font-size:1.4rem;margin:0}
 #loading p{color:var(--muted);margin:0;max-width:34ch}
@@ -59,7 +97,7 @@ html.native #cam,html.native #overlay,html.native #fromPhoto{display:none}
 #menu table{width:100%;border-collapse:collapse;font-size:.88rem;font-variant-numeric:tabular-nums;margin:6px 0 4px}
 #menu td,#menu th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:right}
 #menu td:first-child,#menu th:first-child{text-align:left}
-#copyText{width:100%;height:140px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:10px;display:none;margin-top:8px}
+textarea{width:100%;height:140px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:10px;margin-top:8px}
 @media (prefers-reduced-motion:no-preference){.sheet.show{animation:up .18s ease-out}@keyframes up{from{transform:translateY(30px);opacity:.6}}}
 </style>
 </head>
@@ -68,23 +106,31 @@ html.native #cam,html.native #overlay,html.native #fromPhoto{display:none}
 <canvas id="overlay" aria-hidden="true"></canvas>
 
 <div class="top">
-  <div class="stats" id="stats" role="status"><b>0</b> scansioni</div>
+  <button id="modeBtn" type="button" aria-label="Modalità e collezione">Controllo</button>
   <button id="switchCam" type="button" hidden>Obiettivo</button>
-  <button id="torch" type="button" hidden>Torcia</button>
-  <button id="openMenu" type="button" aria-label="Risultati e opzioni">Risultati</button>
+  <button id="torch" type="button" hidden aria-pressed="false">Torcia</button>
+  <button id="openMenu" type="button">Menu</button>
 </div>
 
 <div class="bottom">
-  <div class="row"><div class="hint" id="hint" role="status">Inquadra una carta su un fondo scuro</div></div>
-  <div class="row">
-    <button class="side chip" type="button" id="sleeve" aria-pressed="false">In bustina</button>
-    <label class="side chip" id="fromPhoto" style="text-align:center">Da foto<input type="file" id="file" accept="image/*" hidden></label>
+  <div class="stats" id="stats" role="status"></div>
+  <div class="row"><div class="hint" id="hint" role="status">Inquadra una carta</div></div>
+  <div class="chips" id="sticky" role="group" aria-label="Variante delle prossime carte (resta finché non la cambi)">
+    <button class="chip" type="button" data-v="r" aria-pressed="false">Reverse</button>
+    <button class="chip" type="button" data-v="h" aria-pressed="false">Holo</button>
+    <button class="chip" type="button" data-v="first" aria-pressed="false">1ª edizione</button>
+    <label class="chip" id="fromPhoto">Da foto<input type="file" id="file" accept="image/*" hidden></label>
   </div>
 </div>
 
-<section class="sheet" id="result" aria-label="Risultato">
+<div class="verdict" id="verdict" hidden role="alert">
+  <div class="box"><div class="vt" id="vTitle"></div><div class="vn" id="vName"></div><div id="vLines"></div>
+    <button type="button" id="undo">Annulla</button></div>
+</div>
+
+<section class="sheet" id="result" aria-label="Quale stampa?">
   <div class="seen"><canvas id="seen" width="320" height="446"></canvas>
-    <div><h2>Qual è la tua carta?</h2><p id="readInfo"></p></div></div>
+    <div><h2 id="resultTitle">Quale stampa è?</h2><p id="readInfo"></p></div></div>
   <div class="chips" id="langPick" role="group" aria-label="Lingua della tua carta">
     <button class="chip" type="button" data-lang="it">IT</button><button class="chip" type="button" data-lang="en">EN</button>
     <button class="chip" type="button" data-lang="fr">FR</button><button class="chip" type="button" data-lang="de">DE</button>
@@ -93,26 +139,60 @@ html.native #cam,html.native #overlay,html.native #fromPhoto{display:none}
     <button class="chip" type="button" data-lang="ko">KR</button>
   </div>
   <div class="cands" id="cands"></div>
-  <div class="actions">
+  <div class="actions sticky-actions">
     <button type="button" id="none">Nessuna di queste</button>
-    <button type="button" id="redo">Rifai, non contare</button>
+    <button type="button" id="later">Rivedi dopo</button>
+    <button type="button" id="redo">Rifai</button>
   </div>
 </section>
 
-<section class="sheet" id="menu" aria-label="Risultati del test">
-  <h2>Risultati del test</h2>
+<section class="sheet" id="ask" aria-labelledby="askTitle">
+  <h2 id="askTitle"></h2>
+  <div id="askBody"></div>
+  <div class="actions sticky-actions" id="askButtons"></div>
+</section>
+
+<section class="sheet" id="modeSheet" aria-label="Modalità">
+  <h2>Cosa fai con le carte?</h2>
+  <div class="modes" id="modes">
+    <button type="button" data-mode="controllo"><b>Controllo</b><span>Solo il semaforo: non registra niente.</span></button>
+    <button type="button" data-mode="inventario"><b>Inventario</b><span>Le carte entrano nella collezione; i doppioni identici vanno negli scarti.</span></button>
+    <button type="button" data-mode="scarto"><b>Scarti</b><span>Tutto negli scarti, senza semaforo.</span></button>
+    <button type="button" data-mode="sistema"><b>Sistema</b><span>Carte che hai già: passano nella collezione scelta.</span></button>
+  </div>
+  <h3>Collezione</h3>
+  <div class="field"><select id="colPick" aria-label="Collezione"></select></div>
+  <div class="field"><input id="newCol" placeholder="Nuova collezione (es. Raccoglitore blu)" aria-label="Nome della nuova collezione"><button type="button" id="addCol">Crea</button></div>
+  <div class="actions"><button type="button" id="delCol">Elimina questa collezione</button><button type="button" id="closeMode">Fatto</button></div>
+</section>
+
+<section class="sheet" id="menu" aria-label="Menu">
+  <h2>La tua collezione</h2>
+  <p id="colInfo"></p>
+  <div class="field">
+    <select id="colFilter" aria-label="Quali carte mostrare"></select>
+    <input id="colSearch" type="search" placeholder="Cerca per nome" aria-label="Cerca per nome">
+  </div>
+  <div class="list" id="colList" style="margin-top:8px"></div>
+  <div class="actions">
+    <button type="button" id="copyCsv">Copia elenco (per Excel)</button>
+    <button type="button" id="copyBackup">Copia backup</button>
+    <button type="button" id="restore">Ripristina un backup</button>
+  </div>
+  <textarea id="copyText" hidden aria-label="Testo da copiare o da incollare"></textarea>
+  <button type="button" id="restoreGo" hidden style="width:100%;margin-top:8px">Ripristina il backup incollato</button>
+  <h3>Prove dello scanner</h3>
   <div id="table"></div>
   <p id="tech"></p>
   <div class="actions">
     <button type="button" id="copy">Copia risultati da incollare in chat</button>
-    <textarea id="copyText" readonly aria-label="Risultati da copiare"></textarea>
-    <button type="button" id="reset">Azzera i risultati</button>
+    <button type="button" id="reset">Azzera i risultati delle prove</button>
     <button type="button" id="closeMenu">Chiudi</button>
   </div>
 </section>
 
 <div id="loading">
-  <h1>Scanner Carte · Prototipo</h1>
+  <h1>Scanner Carte</h1>
   <p id="loadMsg">Preparo lo scanner…</p>
   <div class="bar"><i id="loadBar"></i></div>
   <p>La prima volta scarica circa 140 MB: meglio col Wi-Fi.</p>
