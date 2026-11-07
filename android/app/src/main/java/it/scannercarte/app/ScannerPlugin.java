@@ -314,7 +314,8 @@ public class ScannerPlugin extends Plugin {
                 frameH = h;
             }
             final int s = still;
-            overlay.post(() -> overlay.show(q, w, h, s, mode));
+            final Point[] found = q;
+            overlay.post(() -> overlay.show(found, w, h, s, mode));
             if (now - lastEvent >= 90) {
                 lastEvent = now;
                 JSObject o = new JSObject();
